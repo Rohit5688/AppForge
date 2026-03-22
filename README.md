@@ -46,9 +46,11 @@ This server bridges the gap between natural language test intent and executable,
    * Java JDK / Android Studio / Xcode (depending on target platform)
    * Appium 2.x CLI globally installed (`npm install -g appium`)
 
-2. **Bootstrapping the Server (via config)**:
+### 2. 🔌 Bootstrapping the Server
+
 Add the local server to your MCP Client settings:
-\`\`\`json
+
+```json
 {
   "mcpServers": {
     "appforge": {
@@ -57,8 +59,10 @@ Add the local server to your MCP Client settings:
     }
   }
 }
-\`\`\`
-*(Also supports SSE transport via `--transport sse --port 3100`)*
+```
+
+> [!TIP]
+> This server also supports **SSE transport** via `--transport sse --port 3100`.
 
 ---
 
