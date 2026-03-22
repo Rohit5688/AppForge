@@ -7,12 +7,26 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <style>
         :root {
+            /* Dark Mode (Default) */
             --primary: #5a57e6;
-            --primary-glow: rgba(90, 87, 230, 0.4);
+            --primary-glow: rgba(90, 87, 230, 0.5);
             --bg: #0a0a14;
+            --header-bg: radial-gradient(circle at 50% 50%, #1a1a33 0%, #0a0a14 100%);
             --card-bg: rgba(22, 22, 38, 0.7);
             --text: #f5f3ff;
             --text-dim: #a1a1aa;
+            --code-bg: #000;
+            --logo-filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 0 3px rgba(255,255,255,0.5));
+        }
+
+        body.light-mode {
+            --bg: #fafafa;
+            --header-bg: radial-gradient(circle at 50% 50%, #f3f4f6 0%, #e5e7eb 100%);
+            --card-bg: #ffffff;
+            --text: #18181b;
+            --text-dim: #71717a;
+            --code-bg: #27272a;
+            --logo-filter: none;
         }
 
         * {
@@ -43,7 +57,7 @@
             justify-content: center;
             align-items: center;
             text-align: center;
-            background: radial-gradient(circle at 50% 50%, #1a1a33 0%, #0a0a14 100%);
+            background: var(--header-bg);
             position: relative;
         }
 
@@ -51,7 +65,7 @@
             max-width: 600px;
             max-height: 450px;
             object-fit: contain;
-            filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 0 3px rgba(255,255,255,0.5));
+            filter: var(--logo-filter);
             image-rendering: -webkit-optimize-contrast;
             margin-bottom: -80px;
             animation: fadeIn 1.5s ease-out;
@@ -132,14 +146,40 @@
             color: var(--primary);
         }
 
+        .theme-toggle {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            z-index: 1000;
+            background: var(--card-bg);
+            border: 1px solid var(--primary);
+            color: var(--text);
+            padding: 0.5rem;
+            border-radius: 50%;
+            cursor: pointer;
+            width: 45px;
+            height: 45px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            transition: all 0.3s ease;
+        }
+
+        .theme-toggle:hover {
+            transform: scale(1.1);
+            background: var(--primary);
+            color: white;
+        }
+
         .code-block {
-            background: #000;
+            background: var(--code-bg);
             padding: 2rem;
             border-radius: 12px;
             margin-top: 4rem;
             font-family: 'Courier New', Courier, monospace;
             color: #10b981;
-            border: 1px solid #292524;
+            border: 1px solid var(--text-dim);
             text-align: left;
         }
 
@@ -157,6 +197,10 @@
     </style>
 </head>
 <body>
+
+    <button class="theme-toggle" id="theme-toggle" title="Toggle Light/Dark Mode">
+        <span id="theme-icon">🌙</span>
+    </button>
 
     <header>
         <div class="container">
@@ -228,5 +272,24 @@
         </div>
     </footer>
 
+    <script>
+        const body = document.body;
+        const toggle = document.getElementById('theme-toggle');
+        const icon = document.getElementById('theme-icon');
+
+        // Check for saved theme
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'light') {
+            body.classList.add('light-mode');
+            icon.innerText = '☀️';
+        }
+
+        toggle.addEventListener('click', () => {
+            body.classList.toggle('light-mode');
+            const isLight = body.classList.contains('light-mode');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            icon.innerText = isLight ? '☀️' : '🌙';
+        });
+    </script>
 </body>
 </html>
