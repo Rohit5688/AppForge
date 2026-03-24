@@ -1,1 +1,8 @@
-node_modules
+node_modules/
+dist/
+binaries/
+test-results/
+.env
+.mcp-staging/
+.pkg-cache/
+*.log

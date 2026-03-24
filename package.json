@@ -1,17 +1,47 @@
 {
-  "name": "appium-cucumber-pom-mcp",
+  "name": "appforge",
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "build:macos": "pkg . --targets node18-macos-arm64,node18-macos-x64 --out-path binaries"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "pkg": {
+    "scripts": [
+      "dist/**/*.js",
+      "node_modules/@modelcontextprotocol/sdk/dist/**/*.js"
+    ],
+    "assets": [
+      "dist/**/*"
+    ]
+  },
+  "bin": {
+    "appforge": "./dist/index.js"
+  },
+  "description": "Enterprise-grade MCP Server for orchestrated mobile automation (Android/iOS) using WebdriverIO and Cucumber BDD.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "appium",
+    "webdriverio",
+    "cucumber",
+    "mobile-automation",
+    "ai",
+    "qa"
+  ],
+  "author": "ForgeTest AI",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ForgeTest-AI/AppForge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ForgeTest-AI/AppForge/issues"
+  },
+  "homepage": "https://github.com/ForgeTest-AI/AppForge#readme",
   "dependencies": {
     "@cucumber/cucumber": "^12.7.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -23,6 +53,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "pkg": "^5.8.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

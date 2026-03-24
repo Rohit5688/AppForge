@@ -15,7 +15,7 @@ This guide walks you through testing every feature of AppForge as an end user.
   "mcpServers": {
     "appforge": {
       "command": "node",
-      "args": ["/absolute/path/to/appium-cucumber-pom-mcp/dist/index.js", "--transport", "stdio"]
+      "args": ["/absolute/path/to/AppForge/dist/index.js", "--transport", "stdio"]
     }
   }
 }

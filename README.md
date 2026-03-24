@@ -55,7 +55,7 @@ Add the local server to your MCP Client settings:
   "mcpServers": {
     "appforge": {
       "command": "node",
-      "args": ["/path/to/appium-cucumber-pom-mcp/dist/index.js", "--transport", "stdio"]
+      "args": ["/absolute/path/to/AppForge/dist/index.js"]
     }
   }
 }

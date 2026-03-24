@@ -32,10 +32,10 @@ import { executeSandbox } from "./services/SandboxEngine.js";
 import type { SandboxApiRegistry } from "./services/SandboxEngine.js";
 
 /**
- * Appium Cucumber POM MCP Server
+ * AppForge — Mobile Automation MCP Server
  * Orchestrates Mobile Automation (Android/iOS) using WebdriverIO + Cucumber
  */
-class AppiumMcpServer {
+class AppForgeServer {
   private server: Server;
   private projectSetupService = new ProjectSetupService();
   private configService = new McpConfigService();
@@ -60,7 +60,7 @@ class AppiumMcpServer {
 
   constructor() {
     this.server = new Server(
-      { name: "appium-cucumber-pom-mcp", version: "1.0.0" },
+      { name: "AppForge", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
     this.setupToolHandlers();
@@ -720,10 +720,10 @@ class AppiumMcpServer {
     } else {
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
-      console.error("Appium MCP Server running on stdio");
+      console.error("AppForge Server running on stdio");
     }
   }
 }
 
-const server = new AppiumMcpServer();
+const server = new AppForgeServer();
 server.run().catch(console.error);
