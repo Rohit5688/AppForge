@@ -130,49 +130,39 @@ export class CodebaseAnalyzerService {
         let hasYaml = false;
         let hasPom = false;
         let hasFacade = false;
-        // 1. Check for YAML locator files
-        const yamlDirs = [
-            path.join(projectRoot, 'locators'),
-            path.join(projectRoot, 'src', 'locators'),
-            path.join(projectRoot, 'test-data', 'locators')
-        ];
-        for (const dir of yamlDirs) {
-            const yamlFiles = await this.listFilesWithExtensions(dir, ['.yaml', '.yml']);
-            if (yamlFiles.length > 0) {
-                hasYaml = true;
-                analysis.yamlLocatorFiles = yamlFiles.map(f => path.relative(projectRoot, f));
-            }
+        // 1. Check for YAML locator files everywhere in the workspace
+        const yamlFiles = await this.listFilesWithExtensions(projectRoot, ['.yaml', '.yml']);
+        // Filter out irrelevant yaml files like CI workflows or docker-compose
+        const validYamlLocators = yamlFiles.filter(f => {
+            const name = path.basename(f).toLowerCase();
+            return !name.includes('github') && !name.includes('gitlab') && !name.includes('docker') && !f.includes('node_modules');
+        });
+        if (validYamlLocators.length > 0) {
+            hasYaml = true;
+            analysis.yamlLocatorFiles = validYamlLocators;
         }
-        // 2. Check for POM patterns (page classes with inline $() selectors)
+        // 2. Check for POM patterns (page classes with inline $() selectors or decorators)
         if (analysis.existingPageObjects.length > 0) {
             const hasInlineLocators = analysis.existingPageObjects.some(p => p.locators.length > 0);
             if (hasInlineLocators)
                 hasPom = true;
         }
-        // 3. Check for Facade/resolveLocator patterns in step definitions and utils
-        const searchDirs = [
-            path.join(projectRoot, 'src'),
-            path.join(projectRoot, 'step-definitions'),
-            path.join(projectRoot, 'utils'),
-            path.join(projectRoot, 'pages')
-        ];
-        for (const dir of searchDirs) {
-            const tsFiles = await this.listFilesAbsolute(dir, '.ts');
-            for (const f of tsFiles) {
-                try {
-                    const content = await fs.readFile(f, 'utf8');
-                    if (content.includes('resolveLocator') ||
-                        content.includes('driverFacade') ||
-                        content.includes('LocatorService') ||
-                        content.includes('getLocator(')) {
-                        hasFacade = true;
-                        break;
-                    }
+        // 3. Check for Facade/resolveLocator patterns across ALL discovered ts files
+        const tsFiles = await this.listFilesWithExtensions(projectRoot, ['.ts']);
+        for (const f of tsFiles) {
+            if (f.includes('node_modules') || f.includes('.d.ts'))
+                continue;
+            try {
+                const content = await fs.readFile(f, 'utf8');
+                if (content.includes('resolveLocator') ||
+                    content.includes('driverFacade') ||
+                    content.includes('LocatorService') ||
+                    content.includes('getLocator(')) {
+                    hasFacade = true;
+                    break;
                 }
-                catch { /* skip unreadable files */ }
             }
-            if (hasFacade)
-                break;
+            catch { /* skip unreadable files */ }
         }
         // 4. Classify
         if (hasYaml && hasFacade)
@@ -190,6 +180,8 @@ export class CodebaseAnalyzerService {
         try {
             const entries = await fs.readdir(dir, { withFileTypes: true });
             for (const entry of entries) {
+                if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git')
+                    continue;
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     results = results.concat(await this.listFilesWithExtensions(fullPath, extensions));
