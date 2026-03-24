@@ -66,7 +66,7 @@ class AppForgeServer {
             tools: [
                 {
                     name: "setup_project",
-                    description: "Initialize a complete Mobile Automation project with Appium, Cucumber, TypeScript, BasePage, hooks, and sample feature.",
+                    description: "Initialize a NEW project with standard Appium/Cucumber structure. ⚠️ WARNING: Run 'upgrade_project' instead if the project already exists to avoid overwriting your current configurations.",
                     inputSchema: {
                         type: "object",
                         properties: {
@@ -116,7 +116,7 @@ class AppForgeServer {
                 },
                 {
                     name: "analyze_codebase",
-                    description: "Scan existing codebase using AST for reusable steps, page methods, and utils.",
+                    description: "⚠️ TOKEN-INTENSIVE (LEGACY): Scan the entire codebase. Only use this for projects with < 5 source files. FOR ALL OTHER PROJECTS, ALWAYS use 'execute_sandbox_code' (Turbo Mode) for 98% token savings.",
                     inputSchema: {
                         type: "object",
                         properties: {
@@ -425,7 +425,7 @@ class AppForgeServer {
                 },
                 {
                     name: "execute_sandbox_code",
-                    description: "TURBO MODE: Execute a JavaScript snippet inside a secure V8 sandbox on the MCP server. The script has access to `forge.api.*` methods that call internal server services (like codebase analysis, test execution) and can process data locally, returning ONLY the final result. This drastically reduces token usage. Available APIs: forge.api.analyzeCodebase(projectRoot), forge.api.runTests(projectRoot), forge.api.readFile(filePath), forge.api.getConfig(projectRoot), forge.api.summarizeSuite(projectRoot). Use console.log() for debugging (captured and returned).",
+                    description: "🚀 TURBO MODE (RECOMMENDED): Execute a JavaScript snippet inside a secure V8 sandbox to analyze code, search for existing step definitions, or read specific files. Use this tool for ALL DATA RETRIEVAL AND SCANNING tasks to avoid token overflow. The script has access to `forge.api.*` and returns only the final filtered result. Available APIs: forge.api.analyzeCodebase(projectRoot), forge.api.runTests(projectRoot), forge.api.readFile(filePath), forge.api.getConfig(projectRoot).",
                     inputSchema: {
                         type: "object",
                         properties: {

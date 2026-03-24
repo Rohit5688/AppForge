@@ -16,6 +16,7 @@ export class CodebaseAnalyzerService {
             existingStepDefinitions: [],
             existingPageObjects: [],
             existingUtils: [],
+            conflicts: [],
         };
         // 1. Discover Feature files
         result.existingFeatures = await this.listFiles(featuresDir, '.feature', projectRoot);
@@ -88,6 +89,21 @@ export class CodebaseAnalyzerService {
                         publicMethods: methods
                     });
                 }
+            }
+        }
+        // 5. Detect Step Rule Conflicts
+        const patternMap = new Map();
+        for (const stepDef of result.existingStepDefinitions) {
+            for (const step of stepDef.steps) {
+                const key = `${step.type}: ${step.pattern}`;
+                const existing = patternMap.get(key) || [];
+                existing.push(stepDef.file);
+                patternMap.set(key, existing);
+            }
+        }
+        for (const [pattern, files] of patternMap.entries()) {
+            if (files.length > 1) {
+                result.conflicts.push({ pattern, files: [...new Set(files)] });
             }
         }
         return result;

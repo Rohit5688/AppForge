@@ -46,6 +46,21 @@ export class AuditLocatorService {
                 }
             }
         }
+        // Also scan YAML locator files (e.g., locators/*.yaml) — common in non-POM projects
+        const yamlDirs = [
+            path.join(projectRoot, 'locators'),
+            path.join(projectRoot, 'src', 'locators'),
+            path.join(projectRoot, 'test-data', 'locators')
+        ];
+        for (const yamlDir of yamlDirs) {
+            const yamlFiles = await this.listFiles(yamlDir, ['.yaml', '.yml']);
+            for (const yamlFile of yamlFiles) {
+                const relPath = path.relative(projectRoot, yamlFile);
+                const content = await fs.readFile(yamlFile, 'utf8');
+                const yamlEntries = this.extractYamlLocators(content, relPath);
+                entries.push(...yamlEntries);
+            }
+        }
         const accessibilityIdCount = entries.filter(e => e.strategy === 'accessibility-id').length;
         const xpathCount = entries.filter(e => e.strategy === 'xpath').length;
         const otherCount = entries.length - accessibilityIdCount - xpathCount;
@@ -130,16 +145,55 @@ export class AuditLocatorService {
         }
         return lines.join('\n');
     }
+    /**
+     * Extracts locator selectors from YAML content.
+     * Supports patterns like:
+     *   loginButton:
+     *     android: ~login_btn
+     *     ios: ~loginButton
+     * Or flat: loginButton: "~login_btn"
+     */
+    extractYamlLocators(content, filePath) {
+        const yamlEntries = [];
+        let currentKey = 'unknown';
+        const lines = content.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#'))
+                continue;
+            // Detect a top-level key name (locator identifier)
+            const keyMatch = trimmed.match(/^([\w][\w.-]*):$/);
+            if (keyMatch && keyMatch[1]) {
+                currentKey = keyMatch[1];
+                continue;
+            }
+            // Detect platform-specific selector values: android: ~selector or ios: //xpath
+            const platformMatch = trimmed.match(/^(android|ios|selector|locator|value)\s*:\s*['"]?([~#/][^'"\s]+|.*?:id\/[^'"\s]+)['"]?$/);
+            if (platformMatch && platformMatch[2]) {
+                yamlEntries.push(this.classifyEntry(filePath, 'YAML', `${currentKey}.${platformMatch[1]}`, platformMatch[2]));
+                continue;
+            }
+            // Handle flat format: loginButton: "~login_btn"
+            const flatMatch = trimmed.match(/^([\w][\w.-]*):\s+['"]?([~#/][^'"\s]+|.*?:id\/[^'"\s]+)['"]?$/);
+            if (flatMatch && flatMatch[1] && flatMatch[2]) {
+                yamlEntries.push(this.classifyEntry(filePath, 'YAML', flatMatch[1], flatMatch[2]));
+            }
+        }
+        return yamlEntries;
+    }
     async listTsFiles(dir) {
+        return this.listFiles(dir, ['.ts']);
+    }
+    async listFiles(dir, extensions) {
         let results = [];
         try {
-            const entries = await fs.readdir(dir, { withFileTypes: true });
-            for (const entry of entries) {
+            const dirEntries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of dirEntries) {
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
-                    results = results.concat(await this.listTsFiles(fullPath));
+                    results = results.concat(await this.listFiles(fullPath, extensions));
                 }
-                else if (entry.name.endsWith('.ts')) {
+                else if (extensions.some(ext => entry.name.endsWith(ext))) {
                     results.push(fullPath);
                 }
             }

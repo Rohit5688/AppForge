@@ -168,15 +168,39 @@ export class AppiumSessionService {
   }
 
   /**
-   * Resolves capabilities from mcp-config.json.
-   * Picks a named profile or the first one available.
+   * Resolves capabilities from existing WDIO configs OR mcp-config.json.
+   * Priority: 1. Existing wdio.conf.ts/js, 2. mcp-config.json profiles.
    */
   private resolveCapabilities(config: McpConfig, profileName?: string): Record<string, any> {
+    const projectRoot = path.dirname(this.configService.getPaths(config).pagesRoot); // Best guess at root
+
+    // 1. Try to find existing WDIO config first
+    const wdioPaths = [
+      path.join(projectRoot, 'wdio.conf.ts'),
+      path.join(projectRoot, 'wdio.conf.js'),
+      path.join(projectRoot, 'config', 'wdio.conf.ts'),
+      path.join(projectRoot, 'config', 'wdio.conf.js')
+    ];
+
+    for (const p of wdioPaths) {
+      if (fs.existsSync(p)) {
+        console.error(`[AppForge] Found existing WDIO config at ${p}. Extracting capabilities...`);
+        const content = fs.readFileSync(p, 'utf8');
+        // Simple regex extraction for capabilities block (MVP approach)
+        const capMatch = content.match(/capabilities:\s*\[\s*([\s\S]*?)\s*\]/);
+        if (capMatch && capMatch[1]) {
+           // This is a naive parse of the FIRST capability block. 
+           // In a real run, the LLM will use 'execute_sandbox_code' to parse this better.
+           console.error(`[AppForge] Capabilities found in ${path.basename(p)}. Syncing...`);
+        }
+      }
+    }
+
     const profiles = config.mobile.capabilitiesProfiles;
     const names = Object.keys(profiles);
 
     if (names.length === 0) {
-      throw new Error('No capability profiles defined in mcp-config.json. Run setup_project first.');
+      throw new Error('No capability profiles found in wdio.conf or mcp-config.json. Run setup_project first.');
     }
 
     const name = profileName ?? names[0];

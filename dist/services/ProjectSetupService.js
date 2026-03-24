@@ -5,6 +5,13 @@ export class ProjectSetupService {
      * Scaffolds a complete, runnable Appium + Cucumber + TypeScript project.
      */
     async setup(projectRoot, platform = 'android', appName = 'MyMobileApp') {
+        // PRE-CHECK: Prevent overwriting mature projects
+        const criticalFiles = ['package.json', 'mcp-config.json', 'wdio.conf.ts', 'wdio.conf.js', 'playwright.config.ts'];
+        const existing = criticalFiles.filter(f => fs.existsSync(path.join(projectRoot, f)));
+        if (existing.length > 0) {
+            throw new Error(`[AppForge] SAFETY HALT: Existing configurations detected (${existing.join(', ')}). ` +
+                `This tool ONLY initializes brand-new projects. Use 'upgrade_project' instead to maintain your existing setup.`);
+        }
         if (!fs.existsSync(projectRoot)) {
             fs.mkdirSync(projectRoot, { recursive: true });
         }
@@ -179,10 +186,22 @@ export abstract class BasePage {
 
   /**
    * Click an element after waiting for it to appear.
+   * Fallback for iOS: uses 'mobile: tap' if standard click fails or if forced.
    */
-  protected async click(selector: string) {
+  protected async click(selector: string, force: boolean = false) {
     const element = await this.waitForElement(selector);
-    await element.click();
+    const caps = (await browser.capabilities) as any;
+    const isIOS = caps.platformName?.toLowerCase() === 'ios';
+
+    if (isIOS && (force || process.env.USE_MOBILE_TAP === 'true')) {
+      const location = await element.getLocation();
+      const size = await element.getSize();
+      const x = Math.round(location.x + size.width / 2);
+      const y = Math.round(location.y + size.height / 2);
+      await browser.execute('mobile: tap', { x, y });
+    } else {
+      await element.click();
+    }
   }
 
   /**
@@ -423,7 +442,7 @@ export class MobileGestures {
   }
 }
 `;
-        fs.writeFileSync(path.join(projectRoot, 'src', 'utils', 'MobileGestures.ts'), content);
+        this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'MobileGestures.ts'), content);
     }
     scaffoldMockServer(projectRoot) {
         const content = `import express from 'express';
@@ -626,7 +645,7 @@ reports/
                 locatorOrder: ["accessibility id", "resource-id", "xpath", "class chain", "predicate", "text"]
             }
         };
-        fs.writeFileSync(path.join(projectRoot, 'mcp-config.json'), JSON.stringify(config, null, 2));
+        this.writeIfNotExists(path.join(projectRoot, 'mcp-config.json'), JSON.stringify(config, null, 2));
     }
     scaffoldWdioConfig(projectRoot, platform) {
         const content = `import type { Options } from '@wdio/types';

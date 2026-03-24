@@ -1,5 +1,5 @@
 export interface HealingInstruction {
-  rootCause: 'locator' | 'sync' | 'app_bug';
+  rootCause: 'locator' | 'sync' | 'interaction' | 'app_bug';
   failedSelector?: string;
   fixDescription: string;
   proposedChange?: {
@@ -56,8 +56,16 @@ export class SelfHealingService {
     screenshotBase64: string
   ): Promise<HealingInstruction> {
     // 1. Classify the root cause
-    const isLocatorIssue = /NoSuchElementError|TimeoutError|element.*not.*found|stale element/i.test(testOutput);
+    const isLocatorIssue = /NoSuchElementError|element.*not.*found|stale element/i.test(testOutput);
+    const isInteractionIssue = /not clickable|intercepted|obscured|failed to click|tap failed/i.test(testOutput);
     const isSyncIssue = /timeout|ETIMEDOUT|navigation timeout|waitFor/i.test(testOutput) && !isLocatorIssue;
+
+    if (isInteractionIssue) {
+      return {
+        rootCause: 'interaction',
+        fixDescription: 'The element was found but the interaction (click/tap) failed. This usually means the element is obscured, disabled, or requires a platform-specific tap strategy (e.g., mobile: tap for iOS).'
+      };
+    }
 
     if (!isLocatorIssue && !isSyncIssue) {
       return {
@@ -140,14 +148,17 @@ ${xml.length > 10000 ? '... (truncated, full XML was ' + xml.length + ' chars)' 
 ${screenshotBase64 ? '### 🖼️ VISION CONTEXT\nA Base64 screenshot of the current device state is attached. Use it to visually identify the target element.\n' : ''}
 ### 🎯 YOUR TASK
 1. Analyze the XML hierarchy and the screenshot to find the element the test was trying to interact with.
-2. Determine the BEST new selector. Use this priority: \`accessibility-id (~id)\` > \`resource-id\` > \`xpath\` > \`text\`.
-3. Return ONLY a JSON object:
+2. Determine if the issue is the **Selector** or the **Interaction Strategy**.
+3. **Architectural Awareness**: Check if the project uses YAML-based locators or a Facade/Wrapper. If so, provide the fix in that style.
+4. **Interaction Fix**: If the root cause is 'interaction', suggest using \`ActionsUtils.forceClick()\`, \`mobile: tap\`, or ensuring the element is in view.
+5. Return ONLY a JSON object:
 \`\`\`json
 {
   "healedSelector": "~newAccessibilityId",
-  "strategy": "accessibility-id",
+  "healedInteraction": "click|tap|mobileTap|scrollAndClick",
+  "strategy": "accessibility-id|facade-update|yaml-locator",
   "confidence": "high|medium|low",
-  "explanation": "Why this selector was chosen"
+  "explanation": "Why this fix was chosen"
 }
 \`\`\`
 `;
