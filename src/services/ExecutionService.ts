@@ -84,8 +84,8 @@ export class ExecutionService {
       }
 
       const hasExtraArgs = Boolean(tagExpression) || Boolean(options?.specificArgs);
-      const isNpmRun = parts.length > 0 && parts[0].trim().startsWith('npm run');
-      if (isNpmRun && hasExtraArgs && !parts[0].includes(' -- ')) {
+      const isPackageRunner = parts.length > 0 && /^(npm|yarn|pnpm|bun)\s+run\b/.test(parts[0].trim());
+      if (isPackageRunner && hasExtraArgs && !parts[0].includes(' -- ')) {
          parts.push('--');
       }
 

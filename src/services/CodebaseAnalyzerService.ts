@@ -70,10 +70,10 @@ export class CodebaseAnalyzerService {
 
     // 1. Discover Feature files anywhere in the workspace
     const featureFiles = await this.listFilesWithExtensions(projectRoot, ['.feature']);
-    result.existingFeatures = featureFiles.map(f => path.relative(projectRoot, f));
+    result.existingFeatures = featureFiles.map(f => path.relative(projectRoot, f).replace(/\\/g, '/'));
 
     if (featureFiles.length > 0) {
-      result.detectedPaths.featuresRoot = path.dirname(path.relative(projectRoot, featureFiles[0]));
+      result.detectedPaths.featuresRoot = path.dirname(path.relative(projectRoot, featureFiles[0]).replace(/\\/g, '/'));
     }
 
     // 2. Discover ALL TypeScript Files dynamically
@@ -87,7 +87,7 @@ export class CodebaseAnalyzerService {
 
       for (const sourceFile of project.getSourceFiles()) {
         const filePath = sourceFile.getFilePath();
-        const relativePath = path.relative(projectRoot, filePath);
+        const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, '/');
         const codeContent = sourceFile.getFullText();
 
         const steps = this.extractStepsAST(sourceFile);
@@ -237,7 +237,7 @@ export class CodebaseAnalyzerService {
     result.architecturePattern = await this.detectArchitecture(projectRoot, result);
 
     if (result.yamlLocatorFiles.length > 0) {
-      result.detectedPaths.locatorsRoot = path.dirname(path.relative(projectRoot, result.yamlLocatorFiles[0]));
+      result.detectedPaths.locatorsRoot = path.dirname(path.relative(projectRoot, result.yamlLocatorFiles[0]).replace(/\\/g, '/'));
     }
 
     // 6. Detect Step Rule Conflicts
