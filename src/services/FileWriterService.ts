@@ -4,6 +4,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { auditGeneratedCode, auditFeatureFile } from '../utils/SecurityUtils.js';
+import { ASTScrutinizer } from '../utils/ASTScrutinizer.js';
 
 const execAsync = promisify(exec);
 
@@ -28,6 +29,20 @@ export class FileWriterService {
     maxRetries: number = 3,
     dryRun: boolean = false
   ): Promise<string> {
+    // Phase 4.1: AST "Laziness" Scanner (Zero-Trust Enforcement)
+    try {
+      for (const f of files) {
+         ASTScrutinizer.scrutinize(f.content, f.path);
+      }
+    } catch (astError: any) {
+       return JSON.stringify({
+         success: false,
+         phase: 'ast-scrutiny',
+         errors: [astError.message || String(astError)],
+         hint: 'Remove any lazy scaffolding or TODOs. Provide the complete implementation.'
+       }, null, 2);
+    }
+
     // Step 1: Write files to a temp staging area first
     const stagingDir = path.join(projectRoot, '.mcp-staging');
     if (!fs.existsSync(stagingDir)) {
