@@ -4,6 +4,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { auditGeneratedCode, auditFeatureFile } from '../utils/SecurityUtils.js';
+import { ASTScrutinizer } from '../utils/ASTScrutinizer.js';
 const execAsync = promisify(exec);
 export class FileWriterService {
     /**
@@ -11,6 +12,20 @@ export class FileWriterService {
      * Retries up to maxRetries times, returning error details for LLM to self-heal.
      */
     async validateAndWrite(projectRoot, files, maxRetries = 3, dryRun = false) {
+        // Phase 4.1: AST "Laziness" Scanner (Zero-Trust Enforcement)
+        try {
+            for (const f of files) {
+                ASTScrutinizer.scrutinize(f.content, f.path);
+            }
+        }
+        catch (astError) {
+            return JSON.stringify({
+                success: false,
+                phase: 'ast-scrutiny',
+                errors: [astError.message || String(astError)],
+                hint: 'Remove any lazy scaffolding or TODOs. Provide the complete implementation.'
+            }, null, 2);
+        }
         // Step 1: Write files to a temp staging area first
         const stagingDir = path.join(projectRoot, '.mcp-staging');
         if (!fs.existsSync(stagingDir)) {
@@ -171,7 +186,7 @@ export class FileWriterService {
             filesWritten: results,
             backedUpTo: overwrittenFiles.length > 0 && fs.existsSync(backupDir) ? backupDir : undefined,
             securityWarnings: securityWarnings.length > 0 ? securityWarnings : undefined,
-            message: `Successfully validated and wrote ${results.length} files.`
+            message: `✅ SUCCESS: Validated and wrote ${results.length} files.\\n\\n--- 🛑 PHASE 3: FORCED RUN VERIFICATION REQUIRED ---\\nYour file creation was successful, but you are NOT DONE YET. You MUST immediately call the 'run_cucumber_test' tool to prove the test actually works in the emulator/device. You are explicitly forbidden from marking this task as complete until you receive a passing test output.`
         }, null, 2);
     }
     /**

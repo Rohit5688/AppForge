@@ -22,8 +22,21 @@ export class ExecutionService {
                     configName = specificConfig;
                 }
             }
-            const parts = ['npx', 'wdio', 'run', configName];
-            // Apply tag filtering via wdio cucumberOpts
+            let parts = [];
+            if (options?.executionCommand) {
+                parts = [options.executionCommand];
+            }
+            else {
+                if (fs.existsSync(path.join(projectRoot, 'yarn.lock'))) {
+                    parts = ['yarn', 'wdio', 'run', configName];
+                }
+                else if (fs.existsSync(path.join(projectRoot, 'pnpm-lock.yaml'))) {
+                    parts = ['pnpm', 'exec', 'wdio', 'run', configName];
+                }
+                else {
+                    parts = ['npx', 'wdio', 'run', configName];
+                }
+            }
             let tagExpression = options?.tags || '';
             // If we fall back to generic monolithic config but user wants a specific platform,
             // we still need to filter via @android or @ios tags for the generic run to work correctly.
@@ -36,6 +49,11 @@ export class ExecutionService {
                     tagExpression = platformTag;
                 }
             }
+            const hasExtraArgs = Boolean(tagExpression) || Boolean(options?.specificArgs);
+            const isPackageRunner = parts.length > 0 && /^(npm|yarn|pnpm|bun)\s+run\b/.test(parts[0].trim());
+            if (isPackageRunner && hasExtraArgs && !parts[0].includes(' -- ')) {
+                parts.push('--');
+            }
             if (tagExpression) {
                 parts.push(`--cucumberOpts.tagExpression="${tagExpression}"`);
             }
@@ -44,10 +62,11 @@ export class ExecutionService {
                 parts.push(options.specificArgs);
             }
             const command = parts.join(' ');
+            const runTimeout = options?.testRunTimeout ?? 300000; // 5 min default timeout for mobile
             const { stdout, stderr } = await execAsync(command, {
                 cwd: projectRoot,
                 env: { ...process.env, FORCE_COLOR: '0' },
-                timeout: 300000 // 5 min timeout
+                timeout: runTimeout
             });
             // Try to parse the JSON report for structured stats
             // wdio requires @wdio/cucumberjs-json-reporter to output this file.

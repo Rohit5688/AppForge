@@ -26,6 +26,9 @@ export class TestGenerationService {
         const conflictsWarning = analysis.conflicts.length > 0
             ? `\n## ⚠️ STEP CONFLICTS DETECTED\nThe following step patterns are duplicated across files. DO NOT create any of these:\n${analysis.conflicts.map(c => `- \`${c.pattern}\` (in: ${c.files.join(', ')})`).join('\n')}\n`
             : '';
+        const aliasesWarning = analysis.importAliases && Object.keys(analysis.importAliases).length > 0
+            ? `\n## 🔄 TYPESCRIPT IMPORT ALIASES (tsconfig.json)\nDo NOT use deep relative paths (e.g. '../../pages/Login'). You MUST map imports to these aliases:\n\`\`\`json\n${JSON.stringify(analysis.importAliases, null, 2)}\n\`\`\`\n`
+            : '';
         // Decide output file type based on architecture
         const locatorFileEntry = (analysis.architecturePattern === 'yaml-locators' || analysis.architecturePattern === 'facade')
             ? '{ "path": "locators/example.yaml", "content": "..." }'
@@ -54,9 +57,11 @@ ${screenshotBase64 ? `## 🖼️ SCREENSHOT\nA Base64 screenshot is attached. Us
 1. **Happy Path**: Implement the primary user flow.
 2. **Negative Scenarios**: Suggest/implement at least one failure path (e.g. invalid login, empty fields).
 3. **Accessibility**: Include steps to verify significant elements have TalkBack/VoiceOver labels.
+4. **[PHASE 4: STATE-MACHINE MICRO-PROMPTING]**: If this request requires generating a very large Page Object AND complex step definitions simultaneously across multiple files, you MUST serialize your work. Generate and invoke \`validate_and_write\` for ONLY the \`jsonPageObjects\` first. Wait for the compilation success response before generating the \`.feature\` and \`.steps.ts\` files in a subsequent attempt. Do NOT overwhelm your context window.
 
 ## EXISTING CODE (REUSE THESE — DO NOT DUPLICATE)
 ${conflictsWarning}
+${aliasesWarning}
 ### Existing Step Definitions:
 ${existingStepsSummary}
 
@@ -72,7 +77,7 @@ ${learningPrompt ?? ''}
 
 ## OUTPUT FORMAT (JSON ONLY)
 
-Return ONLY a valid JSON object matching this schema:
+Return ONLY a valid JSON object matching this schema. DO NOT write raw TypeScript strings for Page Objects. You MUST output Page Objects exclusively in the \`jsonPageObjects\` array. The MCP server will generate the TypeScript files for you:
 \\\`\\\`\\\`json
 {
   "reusePlan": "Human-readable explanation of what was reused and what is new",
@@ -83,6 +88,20 @@ Return ONLY a valid JSON object matching this schema:
   ],
   "filesToUpdate": [
     { "path": "...", "content": "...full updated content...", "reason": "Added newMethod()" }
+  ],
+  "jsonPageObjects": [
+    {
+      "className": "LoginScreen",
+      "path": "pages/LoginScreen.ts",
+      "extendsClass": "BasePage",
+      "imports": ["import { $ } from '@wdio/globals';"],
+      "locators": [
+         { "name": "submitBtn", "selector": "~submit" }
+      ],
+      "methods": [
+         { "name": "submit", "args": [], "body": ["await this.submitBtn.click();"] }
+      ]
+    }
   ]
 }
 \\\`\\\`\\\`
@@ -140,6 +159,12 @@ This project uses BOTH Page Object classes AND YAML locator files. Follow the EX
 `;
         }
         // Default: POM architecture
+        const envStrategyRule = analysis.envConfig?.present
+            ? "Assume the project uses a `.env` file (e.g., `process.env.APP_URL`). Use Playwright's config or `dotenv` rather than hardcoding."
+            : "Assume the project manages configuration dynamically (e.g., via a `config/` directory or custom module). Infer the config import from context and use IT rather than hardcoding.";
+        const dotenvImportRule = analysis.envConfig?.present
+            ? "15. **Environment Setup**: Every Page Object MUST import `dotenv/config` so `.env` values are accessible."
+            : "15. **Environment Setup**: Do NOT inject `import 'dotenv/config';`. Use the project's native configuration strategy as inferred from existing Page Objects or Utility helpers.";
         return `
 ## STRICT RULES — PAGE OBJECT MODEL (Detected: ${arch})
 
@@ -154,6 +179,7 @@ This project uses BOTH Page Object classes AND YAML locator files. Follow the EX
 9. **Data-Driven**: If the scenario involves multiple users/values, use a Scenario Outline with Examples.
 10. **WebView Screens**: Use \`this.switchToWebView()\` before interacting with web elements and \`this.switchToNativeContext()\` to return to native.
 11. **App Lifecycle**: Use \`this.openDeepLink(url)\` for direct navigation. Use \`this.handlePermissionDialog(accept)\` for system popups.
+12. **TSConfig Autowiring**: If your implementation creates a NEW top-level architectural directory (e.g., \`models/\`, \`types/\`, \`helpers/\`), you MUST also actively update \`tsconfig.json\` in the target project via standard file editing tools. You must append the corresponding path alias (e.g., \`"@models/*": ["./models/*"]\`) to \`compilerOptions.paths\`, and ENSURE your newly generated TypeScript files strictly use that alias in their imports.
 ${platform === 'both' ? `
 ## CROSS-PLATFORM RULES (platform: both)
 

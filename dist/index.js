@@ -25,6 +25,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import * as fs from "fs";
 import { executeSandbox } from "./services/SandboxEngine.js";
+import { JsonToPomTranspiler } from "./utils/JsonToPomTranspiler.js";
 /**
  * AppForge — Mobile Automation MCP Server
  * Orchestrates Mobile Automation (Android/iOS) using WebdriverIO + Cucumber
@@ -155,6 +156,21 @@ class AppForgeServer {
                                     required: ["path", "content"]
                                 }
                             },
+                            jsonPageObjects: {
+                                type: "array",
+                                items: {
+                                    type: "object",
+                                    properties: {
+                                        className: { type: "string" },
+                                        path: { type: "string" },
+                                        extendsClass: { type: "string" },
+                                        imports: { type: "array", items: { type: "string" } },
+                                        locators: { type: "array", items: { type: "object" } },
+                                        methods: { type: "array", items: { type: "object" } }
+                                    },
+                                    required: ["className", "path"]
+                                }
+                            },
                             dryRun: { type: "boolean", description: "If true, validates code without writing to disk." }
                         },
                         required: ["projectRoot", "files"]
@@ -169,6 +185,7 @@ class AppForgeServer {
                             projectRoot: { type: "string" },
                             tags: { type: "string", description: "Cucumber tag expression, e.g. '@smoke and @android'" },
                             platform: { type: "string", enum: ["android", "ios"] },
+                            overrideCommand: { type: "string", description: "Optional full command to run (e.g. 'npm run test:e2e:smoke'). Bypasses the default executionCommand." },
                             specificArgs: { type: "string" }
                         },
                         required: ["projectRoot"]
@@ -479,13 +496,30 @@ class AppForgeServer {
                         const prompt = this.generationService.generateAppiumPrompt(args.projectRoot, args.testDescription, config, analysis, args.testName, learningPrompt, args.screenXml, args.screenshotBase64);
                         return this.textResult(prompt);
                     }
-                    case "validate_and_write":
-                        return this.textResult(await this.fileWriterService.validateAndWrite(args.projectRoot, args.files, 3, args.dryRun));
+                    case "validate_and_write": {
+                        const { projectRoot, files, jsonPageObjects, dryRun } = args;
+                        if (jsonPageObjects && Array.isArray(jsonPageObjects)) {
+                            for (const jsonPom of jsonPageObjects) {
+                                if (jsonPom.className && jsonPom.path) {
+                                    const generatedContent = JsonToPomTranspiler.transpile(jsonPom);
+                                    files.push({
+                                        path: jsonPom.path,
+                                        content: generatedContent
+                                    });
+                                }
+                            }
+                        }
+                        return this.textResult(await this.fileWriterService.validateAndWrite(projectRoot, files, 3, dryRun));
+                    }
                     case "run_cucumber_test": {
+                        const config = this.configService.read(args.projectRoot);
+                        const activeCommand = args.overrideCommand || config.executionCommand;
                         const result = await this.executionService.runTest(args.projectRoot, {
                             tags: args.tags,
                             platform: args.platform,
-                            specificArgs: args.specificArgs
+                            specificArgs: args.specificArgs,
+                            executionCommand: activeCommand,
+                            testRunTimeout: config.testRunTimeout
                         });
                         return this.textResult(JSON.stringify(result, null, 2));
                     }
