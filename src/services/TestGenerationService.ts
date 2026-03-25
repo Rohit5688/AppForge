@@ -101,7 +101,7 @@ ${learningPrompt ?? ''}
 
 ## OUTPUT FORMAT (JSON ONLY)
 
-Return ONLY a valid JSON object matching this schema:
+Return ONLY a valid JSON object matching this schema. DO NOT write raw TypeScript strings for Page Objects. You MUST output Page Objects exclusively in the \`jsonPageObjects\` array. The MCP server will generate the TypeScript files for you:
 \\\`\\\`\\\`json
 {
   "reusePlan": "Human-readable explanation of what was reused and what is new",
@@ -112,6 +112,20 @@ Return ONLY a valid JSON object matching this schema:
   ],
   "filesToUpdate": [
     { "path": "...", "content": "...full updated content...", "reason": "Added newMethod()" }
+  ],
+  "jsonPageObjects": [
+    {
+      "className": "LoginScreen",
+      "path": "pages/LoginScreen.ts",
+      "extendsClass": "BasePage",
+      "imports": ["import { $ } from '@wdio/globals';"],
+      "locators": [
+         { "name": "submitBtn", "selector": "~submit" }
+      ],
+      "methods": [
+         { "name": "submit", "args": [], "body": ["await this.submitBtn.click();"] }
+      ]
+    }
   ]
 }
 \\\`\\\`\\\`

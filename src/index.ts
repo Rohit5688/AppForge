@@ -30,6 +30,7 @@ import express from "express";
 import * as fs from "fs";
 import { executeSandbox } from "./services/SandboxEngine.js";
 import type { SandboxApiRegistry } from "./services/SandboxEngine.js";
+import { JsonToPomTranspiler, type JsonPageObject } from "./utils/JsonToPomTranspiler.js";
 
 /**
  * AppForge — Mobile Automation MCP Server
@@ -165,6 +166,21 @@ class AppForgeServer {
                   type: "object",
                   properties: { path: { type: "string" }, content: { type: "string" } },
                   required: ["path", "content"]
+                }
+              },
+              jsonPageObjects: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    className: { type: "string" },
+                    path: { type: "string" },
+                    extendsClass: { type: "string" },
+                    imports: { type: "array", items: { type: "string" } },
+                    locators: { type: "array", items: { type: "object" } },
+                    methods: { type: "array", items: { type: "object" } }
+                  },
+                  required: ["className", "path"]
                 }
               },
               dryRun: { type: "boolean", description: "If true, validates code without writing to disk." }
@@ -507,8 +523,21 @@ class AppForgeServer {
             return this.textResult(prompt);
           }
 
-          case "validate_and_write":
-            return this.textResult(await this.fileWriterService.validateAndWrite(args.projectRoot, args.files, 3, args.dryRun));
+          case "validate_and_write": {
+            const { projectRoot, files, jsonPageObjects, dryRun } = args;
+            if (jsonPageObjects && Array.isArray(jsonPageObjects)) {
+               for (const jsonPom of jsonPageObjects as JsonPageObject[]) {
+                 if (jsonPom.className && jsonPom.path) {
+                    const generatedContent = JsonToPomTranspiler.transpile(jsonPom);
+                    files.push({
+                       path: jsonPom.path,
+                       content: generatedContent
+                    });
+                 }
+               }
+            }
+            return this.textResult(await this.fileWriterService.validateAndWrite(projectRoot, files, 3, dryRun));
+          }
 
           case "run_cucumber_test": {
             const config = this.configService.read(args.projectRoot);
