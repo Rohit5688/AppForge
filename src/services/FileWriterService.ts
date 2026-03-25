@@ -214,7 +214,7 @@ export class FileWriterService {
       filesWritten: results,
       backedUpTo: overwrittenFiles.length > 0 && fs.existsSync(backupDir) ? backupDir : undefined,
       securityWarnings: securityWarnings.length > 0 ? securityWarnings : undefined,
-      message: `Successfully validated and wrote ${results.length} files.`
+      message: `✅ SUCCESS: Validated and wrote ${results.length} files.\\n\\n--- 🛑 PHASE 3: FORCED RUN VERIFICATION REQUIRED ---\\nYour file creation was successful, but you are NOT DONE YET. You MUST immediately call the 'run_cucumber_test' tool to prove the test actually works in the emulator/device. You are explicitly forbidden from marking this task as complete until you receive a passing test output.`
     }, null, 2);
   }
 

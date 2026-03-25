@@ -82,6 +82,7 @@ ${screenshotBase64 ? `## 🖼️ SCREENSHOT\nA Base64 screenshot is attached. Us
 1. **Happy Path**: Implement the primary user flow.
 2. **Negative Scenarios**: Suggest/implement at least one failure path (e.g. invalid login, empty fields).
 3. **Accessibility**: Include steps to verify significant elements have TalkBack/VoiceOver labels.
+4. **[PHASE 4: STATE-MACHINE MICRO-PROMPTING]**: If this request requires generating a very large Page Object AND complex step definitions simultaneously across multiple files, you MUST serialize your work. Generate and invoke \`validate_and_write\` for ONLY the \`jsonPageObjects\` first. Wait for the compilation success response before generating the \`.feature\` and \`.steps.ts\` files in a subsequent attempt. Do NOT overwhelm your context window.
 
 ## EXISTING CODE (REUSE THESE — DO NOT DUPLICATE)
 ${conflictsWarning}
