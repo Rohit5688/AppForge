@@ -208,9 +208,19 @@ export async function executeSandbox(
     // The wrapped script returns a Promise (from the async IIFE).
     const result = await resultPromise;
 
+    // Guard: coalesce undefined → null so JSON.stringify always produces valid JSON.
+    // A script with no `return` yields undefined, which JSON.stringify converts to
+    // the JS value undefined (not the string "null"), causing "undefined" to appear
+    // in concatenated output — the root cause of the "sandbox returned no output" bug.
+    const safeResult = result === undefined ? null : result;
+
+    if (safeResult === null && logs.length === 0) {
+      logs.push('[sandbox] Script completed but returned no value. Add a `return` statement to send data back.');
+    }
+
     return {
       success: true,
-      result,
+      result: safeResult,
       durationMs: Date.now() - startTime,
       logs,
     };
