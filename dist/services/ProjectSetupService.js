@@ -153,6 +153,12 @@ export class ProjectSetupService {
                 declarationMap: true,
                 sourceMap: true
             },
+            // LS-14: Enable ts-node ESM mode so top-level await and ESM imports work
+            // when Cucumber/WDIO load test files via ts-node/esm loader.
+            "ts-node": {
+                esm: true,
+                experimentalSpecifierResolution: "node"
+            },
             include: ["src/**/*.ts", "wdio.conf.ts", "wdio.shared.conf.ts", "wdio.android.conf.ts", "wdio.ios.conf.ts"],
             exclude: ["node_modules", "dist", "reports"]
         };
@@ -161,7 +167,9 @@ export class ProjectSetupService {
     scaffoldCucumberConfig(projectRoot) {
         const content = `// cucumber.js — Cucumber configuration
 export default {
-  requireModule: ['ts-node/register'],
+  // LS-14: Use ts-node ESM loader to support top-level await and NodeNext modules.
+  // 'ts-node/register' is the CommonJS variant and fails on ESM-typed projects.
+  requireModule: ['ts-node/esm'],
   require: ['src/step-definitions/**/*.ts'],
   format: [
     'progress-bar',

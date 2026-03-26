@@ -1,13 +1,19 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import fs from 'fs';
 import type { AppiumSessionService } from './AppiumSessionService.js';
 
 const execAsync = promisify(exec);
 
 export interface ExecutionResult {
   success: boolean;
+  /** Compact tail of WDIO output (~1-2 KB). Full log at outputArtifactPath. */
   output: string;
+  outputTruncated: boolean;
+  outputArtifactPath?: string;
+  timedOut?: boolean;
+  exitCode?: number;
   error?: string;
   reportPath?: string;
   stats?: {
@@ -25,10 +31,10 @@ export interface ExecutionResult {
       error?: string;
     }>;
   };
-  /** Populated on failure when a live Appium session is available */
+  /** Populated on failure: paths to artifact files, never inline Base64 */
   failureContext?: {
-    screenshot: string;
-    pageSource: string;
+    screenshotPath?: string;
+    pageSourcePath?: string;
     timestamp: string;
   };
 }
@@ -108,16 +114,29 @@ export class ExecutionService {
       }
 
       const command = parts.join(' ');
-      const runTimeout = options?.testRunTimeout ?? 300000; // 5 min default timeout for mobile
-      const { stdout, stderr } = await execAsync(command, {
-        cwd: projectRoot,
-        env: { ...process.env, FORCE_COLOR: '0' },
-        timeout: runTimeout
-      });
+      const runTimeout = options?.testRunTimeout ?? 300000; // 5 min default
 
-      // Try to parse the JSON report for structured stats
-      // wdio requires @wdio/cucumberjs-json-reporter to output this file.
-      // If it doesn't exist, we gracefully fail and return 0s.
+      let rawStdout = '';
+      let rawStderr = '';
+      let timedOut = false;
+
+      try {
+        const result = await execAsync(command, {
+          cwd: projectRoot,
+          env: { ...process.env, FORCE_COLOR: '0' },
+          timeout: runTimeout
+        });
+        rawStdout = result.stdout;
+        rawStderr = result.stderr;
+      } catch (innerError: any) {
+        if (innerError.killed || innerError.signal === 'SIGTERM') timedOut = true;
+        throw innerError; // re-throw for outer catch
+      }
+
+      const fullLog = rawStdout + rawStderr;
+      const artifactPath = this.writeOutputArtifact(projectRoot, 'pass', fullLog);
+      const { output, truncated } = this.compactOutput(fullLog);
+
       let stats;
       try {
         stats = await this.parseReport(path.join(projectRoot, 'reports', 'cucumber-results.json'));
@@ -127,12 +146,21 @@ export class ExecutionService {
 
       return {
         success: true,
-        output: stdout + stderr,
+        output,
+        outputTruncated: truncated,
+        outputArtifactPath: artifactPath,
+        timedOut: false,
+        exitCode: 0,
         reportPath: path.join(projectRoot, 'reports', 'cucumber-results.json'),
         stats
       };
+
     } catch (error: any) {
-      // Cucumber exits non-zero on test failures
+      const timedOut = !!(error.killed || error.signal === 'SIGTERM');
+      const fullLog = (error.stdout || '') + (error.stderr || error.message || '');
+      const artifactPath = this.writeOutputArtifact(projectRoot, 'fail', fullLog);
+      const { output, truncated } = this.compactOutput(fullLog);
+
       let stats;
       try {
         stats = await this.parseReport(path.join(projectRoot, 'reports', 'cucumber-results.json'));
@@ -140,27 +168,71 @@ export class ExecutionService {
         stats = { total: 0, passed: 0, failed: 0, skipped: 0, totalDurationMs: 0, scenarios: [] };
       }
 
-      // Auto-capture failure context from live session if available
+      // Auto-capture failure context from live session — write to disk, never inline
       let failureContext: ExecutionResult['failureContext'];
       if (this.sessionService?.isSessionActive()) {
         try {
-          failureContext = {
-            screenshot: await this.sessionService.takeScreenshot(),
-            pageSource: await this.sessionService.getPageSource(),
-            timestamp: new Date().toISOString()
-          };
+          const screenshotBase64 = await this.sessionService.takeScreenshot();
+          const pageSourceXml = await this.sessionService.getPageSource();
+          const timestamp = new Date().toISOString();
+
+          const reportsDir = path.join(projectRoot, 'reports', 'appforge');
+          fs.mkdirSync(reportsDir, { recursive: true });
+          const tag = timestamp.replace(/[:.]/g, '-');
+          const screenshotPath = path.join(reportsDir, `failure-screenshot-${tag}.png`);
+          const pageSourcePath = path.join(reportsDir, `failure-pagesource-${tag}.xml`);
+
+          fs.writeFileSync(screenshotPath, Buffer.from(screenshotBase64, 'base64'));
+          fs.writeFileSync(pageSourcePath, pageSourceXml, 'utf8');
+
+          failureContext = { screenshotPath, pageSourcePath, timestamp };
         } catch {
-          // Session might have died during test — ignore
+          // Session may have died during test — ignore
         }
       }
 
+      const timeoutSec = Math.round((options?.testRunTimeout ?? 300000) / 1000);
       return {
         success: false,
-        output: error.stdout || '',
-        error: error.stderr || error.message,
+        output,
+        outputTruncated: truncated,
+        outputArtifactPath: artifactPath,
+        timedOut,
+        exitCode: error.code ?? 1,
+        error: timedOut
+          ? `Test run timed out after ${timeoutSec}s. Full log at: ${artifactPath}`
+          : error.message,
         stats,
         failureContext
       };
+    }
+  }
+
+  /**
+   * LS-13: Truncates raw WDIO log to last 40 lines or 8 KB, whichever is smaller.
+   * Returns { output: truncated tail, truncated: boolean }.
+   */
+  private compactOutput(raw: string, maxLines = 40, maxBytes = 8192): { output: string; truncated: boolean } {
+    const lines = raw.split('\n');
+    const tail = lines.slice(-maxLines).join('\n');
+    const capped = tail.length > maxBytes ? tail.slice(-maxBytes) : tail;
+    return { output: capped, truncated: lines.length > maxLines || raw.length > maxBytes };
+  }
+
+  /**
+   * LS-13: Persists full WDIO log to .../reports/appforge/run-{timestamp}.log
+   * Returns artifact path for reference in tool responses.
+   */
+  private writeOutputArtifact(projectRoot: string, tag: string, content: string): string {
+    try {
+      const dir = path.join(projectRoot, 'reports', 'appforge');
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const filePath = path.join(dir, `run-${tag}-${ts}.log`);
+      fs.writeFileSync(filePath, content, 'utf8');
+      return filePath;
+    } catch {
+      return '';
     }
   }
 

@@ -256,6 +256,39 @@ export class LearningService {
     tags: string[] = [],
     options: Partial<Pick<LearningRule, 'mandatory' | 'scope' | 'priority' | 'status' | 'conditions'>> = {}
   ): Promise<LearningRule> {
+    // LS-16: Comprehensive input validation — type-check before any write or .length access
+    if (!pattern || typeof pattern !== 'string') {
+      throw new Error('Rule pattern is required and must be a non-empty string.');
+    }
+    if (!solution || typeof solution !== 'string') {
+      throw new Error('Rule solution is required and must be a non-empty string.');
+    }
+    if (!Array.isArray(tags)) {
+      throw new Error('tags must be an array of strings.');
+    }
+    for (const tag of tags) {
+      if (typeof tag !== 'string') {
+        throw new Error(`Each tag must be a string, got ${typeof tag}: ${String(tag)}`);
+      }
+    }
+    if (options.conditions) {
+      const c = options.conditions;
+      const arrFields = ['toolNames', 'platforms', 'keywordsAll', 'keywordsAny', 'tagsAny', 'regexAny'] as const;
+      for (const field of arrFields) {
+        const arr = (c as any)[field];
+        if (arr !== undefined && !Array.isArray(arr)) {
+          throw new Error(`conditions.${field} must be an array.`);
+        }
+        if (Array.isArray(arr)) {
+          for (const item of arr) {
+            if (typeof item !== 'string') {
+              throw new Error(`conditions.${field} items must be strings, got ${typeof item}: ${String(item)}`);
+            }
+          }
+        }
+      }
+    }
+
     // ── Phase 6.5: Input length guards ──────────────────────────
     if (pattern.length > LearningService.MAX_FIELD_LENGTH) {
       throw new Error(`Rule pattern exceeds maximum length (${LearningService.MAX_FIELD_LENGTH} chars). Truncate or summarize the pattern.`);
@@ -513,7 +546,11 @@ export class LearningService {
     const text = ctx.requestText.toLowerCase();
 
     if (rule.conditions.keywordsAll && rule.conditions.keywordsAll.length > 0) {
-      const allMatch = rule.conditions.keywordsAll.every(kw => text.includes(kw.toLowerCase()));
+      const allMatch = rule.conditions.keywordsAll.every(kw => {
+        // LS-16: Defensive null/type check before .toLowerCase()
+        if (!kw || typeof kw !== 'string') return false;
+        return text.includes(kw.toLowerCase());
+      });
       if (!allMatch) {
         return { matched: false, conditionsMatched, skipReason: `keywords_all_miss: not all required keywords present` };
       }
@@ -521,7 +558,11 @@ export class LearningService {
     }
 
     if (rule.conditions.keywordsAny && rule.conditions.keywordsAny.length > 0) {
-      const anyMatch = rule.conditions.keywordsAny.some(kw => text.includes(kw.toLowerCase()));
+      const anyMatch = rule.conditions.keywordsAny.some(kw => {
+        // LS-16: Defensive null/type check before .toLowerCase()
+        if (!kw || typeof kw !== 'string') return false;
+        return text.includes(kw.toLowerCase());
+      });
       if (!anyMatch) {
         return { matched: false, conditionsMatched, skipReason: `keywords_any_miss: none of the keywords present` };
       }
@@ -876,6 +917,8 @@ export class LearningService {
   // ──────────────────────────────────────────────────────────────
 
   private normalize(s: string): string {
+    // LS-16: Guard against null/undefined before calling toLowerCase
+    if (!s || typeof s !== 'string') return '';
     return s.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
   }
 }

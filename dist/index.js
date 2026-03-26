@@ -230,14 +230,14 @@ class AppForgeServer {
                 },
                 {
                     name: "inspect_ui_hierarchy",
-                    description: "[PROMPT-BUILDER] Parses Appium XML page source + Base64 screenshot and returns a structured hierarchy for vision analysis. When xmlDump is omitted and a session is active, automatically fetches the current live screen XML. Pass the output's xmlDump to generate_cucumber_pom for accurate locator generation.",
+                    description: "[PROMPT-BUILDER] Call with NO arguments when a session is active — live XML is fetched automatically from the device. Use this after every perform_action step to read the new screen state. Optionally pass xmlDump to analyse a previously captured hierarchy offline. Pass the output to generate_cucumber_pom for accurate locator generation.",
                     inputSchema: {
                         type: "object",
                         properties: {
-                            xmlDump: { type: "string" },
+                            xmlDump: { type: "string", description: "Optional: Appium XML page source. When omitted, live screen XML is fetched automatically from the active session." },
                             screenshotBase64: { type: "string" }
                         },
-                        required: ["xmlDump"]
+                        required: []
                     }
                 },
                 {
@@ -594,7 +594,7 @@ class AppForgeServer {
                 },
                 {
                     name: "perform_action",
-                    description: "[EXECUTOR] Perform an interaction on the live Appium session (tap, type, clear, swipe, back, home, screenshot). Returns a compact summary by default (~1 KB) — element count, screen title, and top interactive elements with selectors. Pass verboseCapture: true for full pageSource + screenshot when you need deep locator inspection. Essential for multi-step navigation flows: start_appium_session → perform_action → inspect_ui_hierarchy → generate_cucumber_pom.",
+                    description: "[EXECUTOR] Perform an interaction on the live Appium session (tap, type, clear, swipe, back, home, screenshot). Returns a compact summary by default (~1 KB) — element count, screen title, and top interactive elements with selectors. For full locator inspection after navigating to a new screen, call inspect_ui_hierarchy with no arguments.",
                     inputSchema: {
                         type: "object",
                         properties: {
@@ -613,11 +613,7 @@ class AppForgeServer {
                             },
                             captureAfter: {
                                 type: "boolean",
-                                description: "If true (default), returns compact summary of the screen state after the action."
-                            },
-                            verboseCapture: {
-                                type: "boolean",
-                                description: "If true, includes full pageSource XML and Base64 screenshot in the response. Use only for locator deep-dives — this significantly increases response size."
+                                description: "If true (default), returns compact summary of screen state after the action."
                             }
                         },
                         required: ["action"]
@@ -673,7 +669,8 @@ class AppForgeServer {
                         const ctx = {
                             toolName: 'generate_cucumber_pom',
                             platform: config.mobile?.defaultPlatform,
-                            requestText: args.testDescription,
+                            // LS-16: Guard against undefined testDescription to prevent toLowerCase crash in LearningService
+                            requestText: typeof args.testDescription === 'string' ? args.testDescription : '',
                             tags: [],
                         };
                         const resolved = await this.learningService.resolveApplicableRules(args.projectRoot, ctx);

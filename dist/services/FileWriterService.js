@@ -198,14 +198,33 @@ export class FileWriterService {
     // ─── Private Validators ───────────────────────────────────
     async validateTypeScript(projectRoot, stagingDir, tsFiles) {
         try {
-            // Check if tsconfig exists in project root
             const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
             const hasTsConfig = fs.existsSync(tsconfigPath);
-            const filePaths = tsFiles.map(f => path.join(stagingDir, f.path)).join(' ');
-            const cmd = hasTsConfig
-                ? `npx tsc --noEmit --project "${tsconfigPath}" ${filePaths}`
-                : `npx tsc --noEmit --strict --esModuleInterop --skipLibCheck ${filePaths}`;
+            let cmd;
+            let tmpTsconfig;
+            if (hasTsConfig) {
+                // LS-15: tsc refuses to mix --project with explicit file paths (TS5042).
+                // Solution: create a temporary scoped tsconfig in the staging dir that
+                // extends the project tsconfig and restricts `include` to only our staged files.
+                const relativeFiles = tsFiles.map(f => path.relative(stagingDir, path.join(stagingDir, f.path)).replace(/\\/g, '/'));
+                const scopedConfig = {
+                    extends: path.relative(stagingDir, tsconfigPath).replace(/\\/g, '/'),
+                    compilerOptions: { noEmit: true },
+                    include: relativeFiles,
+                };
+                tmpTsconfig = path.join(stagingDir, 'tsconfig.validate.json');
+                fs.writeFileSync(tmpTsconfig, JSON.stringify(scopedConfig, null, 2), 'utf8');
+                cmd = `npx tsc --project "${tmpTsconfig}"`;
+            }
+            else {
+                // No project tsconfig — pass files directly (allowed when --project is absent)
+                const filePaths = tsFiles.map(f => `"${path.join(stagingDir, f.path)}"`).join(' ');
+                cmd = `npx tsc --noEmit --strict --esModuleInterop --skipLibCheck ${filePaths}`;
+            }
             await execAsync(cmd, { cwd: projectRoot });
+            // Clean up temp config
+            if (tmpTsconfig && fs.existsSync(tmpTsconfig))
+                fs.unlinkSync(tmpTsconfig);
             return { valid: true, errors: [] };
         }
         catch (error) {
@@ -213,7 +232,7 @@ export class FileWriterService {
             const errors = stderr
                 .split('\n')
                 .filter((line) => line.includes('error TS'))
-                .slice(0, 10); // Limit to 10 errors
+                .slice(0, 10);
             return { valid: false, errors };
         }
     }
