@@ -120,7 +120,11 @@ export class McpConfigService {
     const configPath = path.join(projectRoot, this.configFileName);
     let existingConfig: any = {};
     if (fs.existsSync(configPath)) {
-      existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      try {
+        existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      } catch (e) {
+        console.error(`[AppForge] Warning: Existing config at ${configPath} is invalid JSON. Overwriting it safely.`);
+      }
     }
     const newConfig = { ...existingConfig, ...config };
     fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf-8');

@@ -207,10 +207,10 @@ export class AppiumSessionService {
         }
         // Check cloud provider
         if (config.mobile.cloud?.provider === 'browserstack') {
-            return `https://${config.mobile.cloud.username}:${config.mobile.cloud.accessKey}@hub-cloud.browserstack.com/wd/hub`;
+            return `https://${config.mobile.cloud.username}:${config.mobile.cloud.accessKey}@hub-cloud.browserstack.com/wd/hub/`;
         }
         if (config.mobile.cloud?.provider === 'saucelabs') {
-            return `https://${config.mobile.cloud.username}:${config.mobile.cloud.accessKey}@ondemand.us-west-1.saucelabs.com/wd/hub`;
+            return `https://${config.mobile.cloud.username}:${config.mobile.cloud.accessKey}@ondemand.us-west-1.saucelabs.com/wd/hub/`;
         }
         return 'http://localhost:4723';
     }

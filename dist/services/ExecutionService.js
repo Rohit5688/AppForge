@@ -150,26 +150,32 @@ export class ExecutionService {
      */
     parseXmlElements(xml) {
         const elements = [];
-        // Simple regex-based extraction from XML (no external XML parser needed)
-        const nodeRegex = /<(\w+\.?\w*)\s([^>]*?)\/?>/g;
-        let match;
-        while ((match = nodeRegex.exec(xml)) !== null) {
-            const tag = match[1];
-            const attrs = match[2];
-            const idMatch = attrs.match(/(?:resource-id|content-desc|accessibility-id|name)="([^"]*)"/);
-            const textMatch = attrs.match(/text="([^"]*)"/);
-            const boundsMatch = attrs.match(/bounds="([^"]*)"/);
-            const clickableMatch = attrs.match(/clickable="true"/);
-            const enabledMatch = attrs.match(/enabled="true"/);
-            // Only include interactable or identifiable elements
-            if (idMatch || textMatch || clickableMatch) {
-                elements.push({
-                    tag,
-                    id: idMatch?.[1] ?? '',
-                    text: textMatch?.[1] ?? '',
-                    bounds: boundsMatch?.[1] ?? ''
-                });
+        try {
+            // Safe, fast regex: match opening bracket, tag name, and lazily capture up to the closing bracket.
+            // Limits attribute block to 15,000 chars to avoid catastrophic CPU hang on broken iOS simulator dumps.
+            const nodeRegex = /<([a-zA-Z0-9\._\-]+)([^>]{0,15000})>/g;
+            let match;
+            while ((match = nodeRegex.exec(xml)) !== null) {
+                const tag = match[1];
+                const attrs = match[2];
+                // Safely extract attributes using focused non-backtracking regexes
+                const idMatch = attrs.match(/(?:resource-id|content-desc|accessibility-id|name)="([^"]{0,1000})"/);
+                const textMatch = attrs.match(/text="([^"]{0,2000})"/);
+                const boundsMatch = attrs.match(/bounds="([^"]{0,200})"/);
+                const clickableMatch = attrs.match(/clickable="true"/);
+                // Only include interactable or identifiable elements
+                if (idMatch || textMatch || clickableMatch) {
+                    elements.push({
+                        tag,
+                        id: idMatch?.[1] ?? '',
+                        text: textMatch?.[1] ?? '',
+                        bounds: boundsMatch?.[1] ?? ''
+                    });
+                }
             }
+        }
+        catch (e) {
+            console.error('[AppForge] XML parsing error (likely malformed UI hierarchy tree):', e.message);
         }
         return elements;
     }
