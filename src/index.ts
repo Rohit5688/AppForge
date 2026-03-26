@@ -17,7 +17,7 @@ import { AuditLocatorService } from "./services/AuditLocatorService.js";
 import { SummarySuiteService } from "./services/SummarySuiteService.js";
 import { EnvironmentCheckService } from "./services/EnvironmentCheckService.js";
 import { CiWorkflowService } from "./services/CiWorkflowService.js";
-import { LearningService } from "./services/LearningService.js";
+import { LearningService, type RequestContext } from "./services/LearningService.js";
 import { RefactoringService } from "./services/RefactoringService.js";
 import { BugReportService } from "./services/BugReportService.js";
 import { TestDataService } from "./services/TestDataService.js";
@@ -28,6 +28,7 @@ import { MigrationService } from "./services/MigrationService.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import * as fs from "fs";
+import * as path from "path";
 import { executeSandbox } from "./services/SandboxEngine.js";
 import type { SandboxApiRegistry } from "./services/SandboxEngine.js";
 import { JsonToPomTranspiler, type JsonPageObject } from "./utils/JsonToPomTranspiler.js";
@@ -139,6 +140,17 @@ class AppForgeServer {
           }
         },
         {
+          name: "analyze_codebase_summary",
+          description: "🚀 LIGHTWEIGHT: Scans the project and returns ONLY structural metadata — file tree with line counts, exported class/function names, and import dependency graph. Never dumps file contents. Safe for projects of any size. Use this instead of analyze_codebase for initial project discovery.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" }
+            },
+            required: ["projectRoot"]
+          }
+        },
+        {
           name: "generate_cucumber_pom",
           description: "Generate a complete BDD suite (feature + steps + page) from plain English with maximum reuse. Provide live Appium screenshots/XML if available to improve locator accuracy.",
           inputSchema: {
@@ -183,9 +195,22 @@ class AppForgeServer {
                   required: ["className", "path"]
                 }
               },
+              patches: {
+                type: "array",
+                description: "Directly apply string replacements to files. Useful for surgical edits rather than overriding the entire file.",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string" },
+                    find: { type: "string", description: "The exact string to replace." },
+                    replace: { type: "string", description: "The new string to insert." }
+                  },
+                  required: ["path", "find", "replace"]
+                }
+              },
               dryRun: { type: "boolean", description: "If true, validates code without writing to disk." }
             },
-            required: ["projectRoot", "files"]
+            required: ["projectRoot"]
           }
         },
         {
@@ -326,9 +351,85 @@ class AppForgeServer {
               projectRoot: { type: "string" },
               issuePattern: { type: "string", description: "The error or pattern to learn from." },
               solution: { type: "string", description: "The correct fix or approach." },
-              tags: { type: "array", items: { type: "string" } }
+              tags: { type: "array", items: { type: "string" } },
+              mandatory: { type: "boolean", description: "If true, generation will FAIL if this rule cannot be injected. Starts as 'draft' until approved." },
+              scope: { type: "string", enum: ["generation", "healing", "all"], description: "Which tool flows this rule applies to." },
+              priority: { type: "number", description: "Higher priority wins conflicts. Default: 0." },
+              conditions: {
+                type: "object",
+                description: "Optional fine-grained matching conditions.",
+                properties: {
+                  toolNames: { type: "array", items: { type: "string" } },
+                  platforms: { type: "array", items: { type: "string" } },
+                  keywordsAny: { type: "array", items: { type: "string" } },
+                  keywordsAll: { type: "array", items: { type: "string" } },
+                  regexAny: { type: "array", items: { type: "string" } },
+                  tagsAny: { type: "array", items: { type: "string" } }
+                }
+              }
             },
             required: ["projectRoot", "issuePattern", "solution"]
+          }
+        },
+        {
+          name: "manage_training_rules",
+          description: "List, update, approve, reject, or delete learned rules in .appium-mcp/mcp-learning.json. Use 'list' to review rules, 'update' to change a rule, 'delete' to remove a rule, 'approve' / 'reject' to change a mandatory rule's status. Use 'snapshot' to save the current corpus, 'list_snapshots' to see available backups, and 'rollback' to restore a previous state.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" },
+              operation: { type: "string", enum: ["list", "update", "delete", "approve", "reject", "health", "snapshot", "list_snapshots", "rollback"] },
+              ruleId: { type: "string", description: "Required for update/delete/approve/reject operations." },
+              snapshotPath: { type: "string", description: "Required for 'rollback' operation — path returned by 'snapshot' or 'list_snapshots'." },
+              updates: {
+                type: "object",
+                description: "Fields to update (for 'update' operation).",
+                properties: {
+                  pattern: { type: "string" },
+                  solution: { type: "string" },
+                  tags: { type: "array", items: { type: "string" } },
+                  mandatory: { type: "boolean" },
+                  scope: { type: "string", enum: ["generation", "healing", "all"] },
+                  priority: { type: "number" },
+                  conditions: { type: "object" }
+                }
+              },
+              filter: {
+                type: "object",
+                description: "Optional filter for 'list' operation.",
+                properties: {
+                  mandatory: { type: "boolean" },
+                  status: { type: "string", enum: ["draft", "approved", "rejected"] },
+                  scope: { type: "string", enum: ["generation", "healing", "all"] }
+                }
+              }
+            },
+            required: ["projectRoot", "operation"]
+          }
+        },
+        {
+          name: "verify_training",
+          description: "Dry-run: shows which learned rules would be injected for a given generation request, including mandatory rule enforcement status, injection preview, and prompt hash. Use before running generation to audit rule coverage.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" },
+              testDescription: { type: "string", description: "The generation request text to simulate." },
+              platform: { type: "string", enum: ["android", "ios", "both"] },
+              tags: { type: "array", items: { type: "string" } }
+            },
+            required: ["projectRoot", "testDescription"]
+          }
+        },
+        {
+          name: "analyze_training_rules_health",
+          description: "Inspect the learning corpus health: identify stale rules that never match, noisy rules that are repeatedly skipped, and mandatory rules awaiting approval.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" }
+            },
+            required: ["projectRoot"]
           }
         },
         {
@@ -345,6 +446,28 @@ class AppForgeServer {
         {
           name: "suggest_refactorings",
           description: "Analyze the codebase for duplicate steps, unused Page Object methods, and XPath over-usage. Returns a structured cleanup report.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" }
+            },
+            required: ["projectRoot"]
+          }
+        },
+        {
+          name: "analyze_code_quality",
+          description: "Wave 2 (1.2): Deep scan for code quality issues (magic numbers, inconsistent APIs, heavy Page Objects, dead code). Returns a structured JSON severity report.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" }
+            },
+            required: ["projectRoot"]
+          }
+        },
+        {
+          name: "predict_flakiness",
+          description: "Wave 2 (3.1): Preventive risk scoring. Scans locators and async synchronization patterns to predict test flakiness before execution.",
           inputSchema: {
             type: "object",
             properties: {
@@ -502,14 +625,51 @@ class AppForgeServer {
             return this.textResult(JSON.stringify(result, null, 2));
           }
 
+          case "analyze_codebase_summary": {
+            const summary = await this.analyzerService.analyzeSummary(args.projectRoot);
+            return this.textResult(JSON.stringify(summary, null, 2));
+          }
+
           case "generate_cucumber_pom": {
             const config = this.configService.read(args.projectRoot);
             const analysis = await this.analyzerService.analyze(args.projectRoot);
-            
+
             // Persist the empirically discovered structural paths back to memory
             config.paths = analysis.detectedPaths;
             this.configService.write(args.projectRoot, config);
-            const learningPrompt = this.learningService.getKnowledgePromptInjection(args.projectRoot);
+
+            // ── Wave 0: Deterministic rule resolution + mandatory enforcement ──
+            const ctx: RequestContext = {
+              toolName: 'generate_cucumber_pom',
+              platform: config.mobile?.defaultPlatform,
+              requestText: args.testDescription,
+              tags: [],
+            };
+            const resolved = await this.learningService.resolveApplicableRules(args.projectRoot, ctx);
+
+            // Hard-fail if any approved mandatory rule cannot be injected
+            if (resolved.skippedMandatoryRules.some(s => s.rule.status === 'approved')) {
+              const failures = resolved.skippedMandatoryRules
+                .filter(s => s.rule.status === 'approved')
+                .map(s => `  • [${s.rule.id}] "${s.rule.pattern}" — ${s.reason}`);
+              return {
+                content: [{ type: "text" as const, text:
+                  `❌ GENERATION ABORTED — Mandatory rule enforcement failure.\n\n` +
+                  `The following approved mandatory rules could not be injected:\n${failures.join('\n')}\n\n` +
+                  `Fix the rule conditions or use manage_training_rules to update them before retrying.`
+                }],
+                isError: true,
+              };
+            }
+
+            // Build injection block (throws if marker check fails)
+            let learningPrompt: string;
+            try {
+              learningPrompt = this.learningService.buildPromptInjection(resolved);
+            } catch (enforcementError: any) {
+              return { content: [{ type: "text" as const, text: `❌ ${enforcementError.message}` }], isError: true };
+            }
+
             const prompt = this.generationService.generateAppiumPrompt(
               args.projectRoot,
               args.testDescription,
@@ -520,11 +680,28 @@ class AppForgeServer {
               args.screenXml,
               args.screenshotBase64
             );
+
+            // ── Wave 0: Write audit trail entry ──
+            const promptHash = this.learningService.hashPrompt(prompt);
+            await this.learningService.writeAuditEntry(args.projectRoot, {
+              timestamp: new Date().toISOString(),
+              toolName: 'generate_cucumber_pom',
+              requestSummary: args.testDescription.slice(0, 120),
+              applicableRuleIds: resolved.applicableRules.map(r => r.id),
+              appliedRuleIds: [...resolved.appliedMandatoryRules, ...resolved.appliedOptionalRules].map(r => r.id),
+              skippedRuleIds: [...resolved.skippedMandatoryRules, ...resolved.skippedOptionalRules].map(s => s.rule.id),
+              skippedReasons: Object.fromEntries(
+                [...resolved.skippedMandatoryRules, ...resolved.skippedOptionalRules].map(s => [s.rule.id, s.reason])
+              ),
+              promptHash,
+            });
+
             return this.textResult(prompt);
           }
 
           case "validate_and_write": {
-            const { projectRoot, files, jsonPageObjects, dryRun } = args;
+            const { projectRoot, jsonPageObjects, dryRun, patches } = args;
+            const files = args.files || [];
             if (jsonPageObjects && Array.isArray(jsonPageObjects)) {
                for (const jsonPom of jsonPageObjects as JsonPageObject[]) {
                  if (jsonPom.className && jsonPom.path) {
@@ -533,6 +710,26 @@ class AppForgeServer {
                        path: jsonPom.path,
                        content: generatedContent
                     });
+                 }
+               }
+            }
+            if (patches && Array.isArray(patches)) {
+               for (const patch of patches) {
+                 const fullPath = path.join(projectRoot, patch.path);
+                 if (fs.existsSync(fullPath)) {
+                   let content = fs.readFileSync(fullPath, 'utf8');
+                   content = content.replace(patch.find, patch.replace);
+                   
+                   // Check if file is already in our 'files' payload from a previous step to avoid conflicts
+                   const existingFile = files.find((f: any) => f.path === patch.path);
+                   if (existingFile) {
+                      existingFile.content = existingFile.content.replace(patch.find, patch.replace);
+                   } else {
+                      files.push({
+                        path: patch.path,
+                        content
+                      });
+                   }
                  }
                }
             }
@@ -577,7 +774,16 @@ class AppForgeServer {
             const config = this.configService.read(args.projectRoot);
             const paths = this.configService.getPaths(config);
             const report = await this.auditLocatorService.audit(args.projectRoot, paths.pagesRoot);
-            return this.textResult(report.markdownReport);
+            // Return full structured report (includes patches) + markdown for human reading
+            return this.textResult(JSON.stringify({
+              schemaVersion: report.schemaVersion,
+              healthScore: report.healthScore,
+              totalLocators: report.totalLocators,
+              criticalCount: report.criticalCount,
+              actionablePatches: report.actionablePatches,
+              entries: report.entries,
+              markdownReport: report.markdownReport,
+            }, null, 2));
           }
 
           case "summarize_suite": {
@@ -608,8 +814,117 @@ class AppForgeServer {
           }
 
           case "train_on_example": {
-            const rule = this.learningService.learn(args.projectRoot, args.issuePattern, args.solution, args.tags ?? []);
-            return this.textResult(`✅ Learned rule "${rule.id}": When encountering "${rule.pattern}" → apply: ${rule.solution}`);
+            const rule = await this.learningService.learn(
+              args.projectRoot,
+              args.issuePattern,
+              args.solution,
+              args.tags ?? [],
+              {
+                mandatory: args.mandatory ?? false,
+                scope: args.scope ?? 'all',
+                priority: args.priority ?? 0,
+                conditions: args.conditions ?? {},
+              }
+            );
+            const mandatoryNote = rule.mandatory
+              ? `\n⚠️ This rule is MANDATORY (status: ${rule.status}). ${
+                  rule.status === 'draft'
+                    ? 'Run manage_training_rules with operation=\'approve\' to activate hard-fail enforcement.'
+                    : 'Hard-fail enforcement is ACTIVE.'
+                }`
+              : '';
+            return this.textResult(
+              `✅ Learned rule "${rule.id}"\n` +
+              `Pattern : "${rule.pattern}"\n` +
+              `Solution: ${rule.solution}\n` +
+              `Scope   : ${rule.scope} | Priority: ${rule.priority}${mandatoryNote}`
+            );
+          }
+
+          case "manage_training_rules": {
+            const { projectRoot, operation, ruleId, updates, filter } = args;
+            switch (operation) {
+              case 'list': {
+                const rules = this.learningService.listRules(projectRoot, filter);
+                return this.textResult(JSON.stringify({ schemaVersion: '2.0.0', count: rules.length, rules }, null, 2));
+              }
+              case 'update': {
+                if (!ruleId) return { content: [{ type: 'text' as const, text: '❌ ruleId is required for update operation.' }], isError: true };
+                const updated = await this.learningService.updateRule(projectRoot, ruleId, updates ?? {});
+                if (!updated) return { content: [{ type: 'text' as const, text: `❌ Rule "${ruleId}" not found.` }], isError: true };
+                return this.textResult(`✅ Rule "${ruleId}" updated.\n${JSON.stringify(updated, null, 2)}`);
+              }
+              case 'delete': {
+                if (!ruleId) return { content: [{ type: 'text' as const, text: '❌ ruleId is required for delete operation.' }], isError: true };
+                const deleted = await this.learningService.forget(projectRoot, ruleId);
+                return deleted
+                  ? this.textResult(`✅ Rule "${ruleId}" deleted.`)
+                  : { content: [{ type: 'text' as const, text: `❌ Rule "${ruleId}" not found.` }], isError: true };
+              }
+              case 'approve': {
+                if (!ruleId) return { content: [{ type: 'text' as const, text: '❌ ruleId is required for approve operation.' }], isError: true };
+                const approved = await this.learningService.updateRule(projectRoot, ruleId, { status: 'approved' });
+                if (!approved) return { content: [{ type: 'text' as const, text: `❌ Rule "${ruleId}" not found.` }], isError: true };
+                return this.textResult(`✅ Rule "${ruleId}" approved. Hard-fail enforcement is now ACTIVE for this rule.`);
+              }
+              case 'reject': {
+                if (!ruleId) return { content: [{ type: 'text' as const, text: '❌ ruleId is required for reject operation.' }], isError: true };
+                const rejected = await this.learningService.updateRule(projectRoot, ruleId, { status: 'rejected' });
+                if (!rejected) return { content: [{ type: 'text' as const, text: `❌ Rule "${ruleId}" not found.` }], isError: true };
+                return this.textResult(`✅ Rule "${ruleId}" rejected. It will no longer match or enforce.`);
+              }
+              case 'health': {
+                const health = this.learningService.analyzeRuleHealth(projectRoot);
+                return this.textResult(JSON.stringify(health, null, 2));
+              }
+              case 'snapshot': {
+                const snap = await this.learningService.createSnapshot(projectRoot);
+                return this.textResult(
+                  `✅ Snapshot created.\n` +
+                  `📁 Path: ${snap.snapshotPath}\n` +
+                  `📋 Rules captured: ${snap.ruleCount}\n` +
+                  `🕐 Created at: ${snap.createdAt}\n\n` +
+                  `Use manage_training_rules with operation='rollback' and snapshotPath='${snap.snapshotPath}' to restore.`
+                );
+              }
+              case 'list_snapshots': {
+                const snapshots = this.learningService.listSnapshots(projectRoot);
+                if (snapshots.length === 0) return this.textResult('📭 No snapshots found. Use operation="snapshot" to create one.');
+                const lines = snapshots.map((s, i) =>
+                  `${i + 1}. [${s.createdAt}] — ${s.ruleCount} rules\n   Path: ${s.snapshotPath}`
+                );
+                return this.textResult(`📚 ${snapshots.length} snapshot(s) found (newest first):\n\n${lines.join('\n\n')}`);
+              }
+              case 'rollback': {
+                const snapshotPath = args.snapshotPath;
+                if (!snapshotPath) return { content: [{ type: 'text' as const, text: '❌ snapshotPath is required for rollback operation.' }], isError: true };
+                const result = await this.learningService.rollbackToSnapshot(projectRoot, snapshotPath);
+                return this.textResult(
+                  `✅ Rollback complete.\n` +
+                  `🔄 Restored from: ${result.rolledBackTo}\n` +
+                  `💾 Safety backup at: ${result.safetyBackupPath}\n` +
+                  `📋 Rules restored: ${result.ruleCount}`
+                );
+              }
+              default:
+                return { content: [{ type: 'text' as const, text: `❌ Unknown operation: ${operation}` }], isError: true };
+            }
+          }
+
+          case "verify_training": {
+            const ctx: RequestContext = {
+              toolName: 'generate_cucumber_pom',
+              platform: args.platform,
+              requestText: args.testDescription,
+              tags: args.tags ?? [],
+            };
+            const result = this.learningService.verifyTraining(args.projectRoot, ctx);
+            return this.textResult(JSON.stringify(result, null, 2));
+          }
+
+          case "analyze_training_rules_health": {
+            const health = this.learningService.analyzeRuleHealth(args.projectRoot);
+            return this.textResult(JSON.stringify(health, null, 2));
           }
 
           case "export_team_knowledge":
@@ -619,6 +934,18 @@ class AppForgeServer {
             const config = this.configService.read(args.projectRoot);
             const analysis = await this.analyzerService.analyze(args.projectRoot);
             return this.textResult(this.refactoringService.generateRefactoringSuggestions(analysis));
+          }
+
+          case "analyze_code_quality": {
+            const analysis = await this.analyzerService.analyze(args.projectRoot);
+            const report = await this.refactoringService.analyzeCodeQuality(args.projectRoot, analysis);
+            return this.textResult(JSON.stringify(report, null, 2));
+          }
+
+          case "predict_flakiness": {
+            const analysis = await this.analyzerService.analyze(args.projectRoot);
+            const report = await this.selfHealingService.predictFlakiness(args.projectRoot, analysis);
+            return this.textResult(JSON.stringify(report, null, 2));
           }
 
           case "export_bug_report":
@@ -694,6 +1021,18 @@ class AppForgeServer {
               summarizeSuite: async (projectRoot: string) => {
                 return await this.summarySuiteService.summarize(projectRoot);
               },
+              suggestRefactorings: async (projectRoot: string) => {
+                const config = this.configService.read(projectRoot);
+                const analysis = await this.analyzerService.analyze(projectRoot);
+                return this.refactoringService.generateRefactoringSuggestions(analysis);
+              },
+              analyzeCodeQuality: async (projectRoot: string) => {
+                const analysis = await this.analyzerService.analyze(projectRoot);
+                return await this.refactoringService.analyzeCodeQuality(projectRoot, analysis);
+              },
+              analyzeRuleHealth: async (projectRoot: string) => {
+                return this.learningService.analyzeRuleHealth(projectRoot);
+              }
             };
 
             const sandboxResult = await executeSandbox(args.script, apiRegistry, { timeoutMs: args.timeoutMs });

@@ -1,3 +1,9 @@
+import type { AppiumSessionService } from './AppiumSessionService.js';
+import type { LearningService } from './LearningService.js';
+import type { CodebaseAnalysisResult } from './CodebaseAnalyzerService.js';
+import fs from 'fs';
+import path from 'path';
+
 export interface HealingInstruction {
   rootCause: 'locator' | 'sync' | 'interaction' | 'app_bug';
   failedSelector?: string;
@@ -19,8 +25,26 @@ export interface SelectorVerification {
   text?: string;
 }
 
-import type { AppiumSessionService } from './AppiumSessionService.js';
-import type { LearningService } from './LearningService.js';
+export type RiskLevel = 'high' | 'medium' | 'low';
+
+export interface FlakinessRisk {
+  elementOrStep: string;
+  file: string;
+  riskLevel: RiskLevel;
+  reason: string;
+  recommendation: string;
+}
+
+export interface FlakinessReport {
+  schemaVersion: '1.0.0';
+  projectRoot: string;
+  totalRisks: number;
+  highRiskCount: number;
+  mediumRiskCount: number;
+  lowRiskCount: number;
+  risks: FlakinessRisk[];
+  overallHealth: string;
+}
 
 export class SelfHealingService {
   private sessionService: AppiumSessionService | null = null;
@@ -35,16 +59,149 @@ export class SelfHealingService {
     this.learningService = service;
   }
 
-  /** Auto-learns a successful selector fix (12.10). */
-  public reportHealSuccess(projectRoot: string, oldSelector: string, newSelector: string) {
+  /** Auto-learns a successful selector fix. */
+  public async reportHealSuccess(projectRoot: string, oldSelector: string, newSelector: string): Promise<void> {
     if (this.learningService) {
-      this.learningService.learn(
-        projectRoot,
-        `Self-Heal Rule: Use \`${newSelector}\` instead of \`${oldSelector}\``,
-        'auto_healed'
-      );
+      try {
+        await this.learningService.learn(
+          projectRoot,
+          `Self-Heal Rule: Use \`${newSelector}\` instead of \`${oldSelector}\``,
+          'auto_healed'
+        );
+      } catch (e) {
+        // Non-fatal: validation may reject the rule (e.g., selector exceeds max length)
+        console.error('[SelfHeal] Failed to auto-learn selector fix:', (e as Error).message);
+      }
     }
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Wave 2 — Phase 3.1: Preventive Flakiness Detection
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Scans existing test patterns and locators to predict which ones are likely to flake.
+   */
+  public async predictFlakiness(projectRoot: string, analysis: CodebaseAnalysisResult): Promise<FlakinessReport> {
+    const risks: FlakinessRisk[] = [];
+
+    // 1. Analyze Page Object Locators
+    for (const po of analysis.existingPageObjects) {
+      for (const loc of po.locators) {
+        let riskLevel: RiskLevel = 'low';
+        let reason = '';
+        let recommendation = '';
+
+        if (loc.strategy === 'xpath') {
+          // Check if it's a long absolute/brittle xpath
+          if (loc.selector.split('/').length > 3 || loc.selector.includes('*[')) {
+             riskLevel = 'high';
+             reason = 'Complex/deep XPath locator. Highly sensitive to DOM/UI tree changes.';
+             recommendation = 'Switch to accessibility-id or a semantic data-testid attribute.';
+          } else {
+             riskLevel = 'medium';
+             reason = 'XPath locator. Prone to breaking across platforms or minor UI updates.';
+             recommendation = 'Replace with a more robust strategy like resource-id or accessibility-id.';
+          }
+        } else if (loc.strategy === 'resource-id') {
+          // Resource-IDs are better but platform specific usually
+          riskLevel = 'low';
+        } else if (loc.strategy === 'accessibility-id') {
+          riskLevel = 'low';
+        } else if (loc.strategy === 'ios-predicate') {
+           if (loc.selector.includes('CONTAINS') || loc.selector.includes('MATCHES')) {
+              riskLevel = 'medium';
+              reason = 'Fuzzy iOS predicate matching (CONTAINS/MATCHES) can match multiple elements or break on localization changes.';
+              recommendation = 'Use exact string matching (==) or prefer accessibility-id.';
+           }
+        } else {
+           riskLevel = 'medium';
+           reason = `Custom or ambiguous strategy "${loc.strategy}". Might not be cross-platform safe.`;
+           recommendation = 'Verify stability and prefer standard Appium locator strategies.';
+        }
+
+        if (riskLevel !== 'low') {
+          risks.push({
+            elementOrStep: `${po.className}.${loc.name}`,
+            file: po.path,
+            riskLevel,
+            reason,
+            recommendation
+          });
+        }
+      }
+    }
+
+    // 2. Discover .ts files to scan for Sync code and Hardcoded waits
+    let tsFiles: string[] = [];
+    try {
+      const walk = (dir: string) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (['node_modules', 'dist', '.git'].includes(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) tsFiles.push(full);
+        }
+      };
+      walk(projectRoot);
+    } catch {}
+
+    for (const file of tsFiles) {
+      const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
+      try {
+        const content = fs.readFileSync(file, 'utf8');
+        
+        // Anti-pattern: hardcoded sleep/pause
+        if (/\bbrowser\.pause\s*\(\s*\d+\s*\)/.test(content) || /\bawait\s+delay\s*\(\s*\d+\s*\)/.test(content) || /\bsleep\s*\(\s*\d+\s*\)/.test(content)) {
+           risks.push({
+             elementOrStep: 'Hardcoded Sleep',
+             file: rel,
+             riskLevel: 'high',
+             reason: 'Hardcoded wait times (e.g. browser.pause, sleep) guarantee slow tests and random failures when the app is slower than the wait time.',
+             recommendation: 'Replace with dynamic waits: waitForDisplayed(), waitForClickable(), or standard WDIO expect() assertions.'
+           });
+        }
+
+        // Anti-pattern: missing await on actionable elements
+        if (/(?<!await\s+)(\$\([^)]+\)|\w+\.\$)\.(click|setValue|getText|waitForDisplayed)\(/.test(content)) {
+          risks.push({
+             elementOrStep: 'Missing `await`',
+             file: rel,
+             riskLevel: 'high',
+             reason: 'Actionable WebdriverIO commands (click, setValue) are being called without `await`. Execution will proceed before the action finishes, causing flaky state.',
+             recommendation: 'Ensure all async WebdriverIO API calls are prefixed with `await`.'
+          });
+        }
+      } catch {}
+    }
+
+    // De-duplicate findings (simplistic)
+    const uniqueRisks = Array.from(new Map(risks.map(r => [`${r.file}-${r.elementOrStep}-${r.reason}`, r])).values());
+    
+    // Sort
+    const order: Record<RiskLevel, number> = { high: 0, medium: 1, low: 2 };
+    uniqueRisks.sort((a, b) => order[a.riskLevel] - order[b.riskLevel]);
+
+    const highRiskCount = uniqueRisks.filter(r => r.riskLevel === 'high').length;
+    const mediumRiskCount = uniqueRisks.filter(r => r.riskLevel === 'medium').length;
+    
+    let health = 'Good';
+    if (highRiskCount > 0) health = 'Poor - High risk of flakiness';
+    else if (mediumRiskCount > 5) health = 'Fair - Needs improvement';
+
+    return {
+      schemaVersion: '1.0.0',
+      projectRoot,
+      totalRisks: uniqueRisks.length,
+      highRiskCount,
+      mediumRiskCount,
+      lowRiskCount: uniqueRisks.filter(r => r.riskLevel === 'low').length,
+      risks: uniqueRisks,
+      overallHealth: health
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
 
   /**
    * Analyzes a Mobile Automation test failure using XML Hierarchy + Screenshots.

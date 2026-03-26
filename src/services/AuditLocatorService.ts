@@ -10,15 +10,23 @@ export interface LocatorAuditEntry {
   selector: string;
   severity: 'ok' | 'warning' | 'critical';
   recommendation: string;
+  // Wave 1.3 — patch-oriented fields
+  suggestedReplacement: string | null;
+  strategyPreference: 'accessibility-id' | 'resource-id' | 'predicate' | 'xpath' | null;
+  patchDiff: string | null;
 }
 
 export interface LocatorAuditReport {
+  schemaVersion: '2.0';
   totalLocators: number;
   accessibilityIdCount: number;
   xpathCount: number;
   otherCount: number;
+  healthScore: number;
+  criticalCount: number;
   entries: LocatorAuditEntry[];
   markdownReport: string;
+  actionablePatches: Array<{ file: string; locatorName: string; from: string; to: string }>;
 }
 
 export class AuditLocatorService {
@@ -93,14 +101,25 @@ export class AuditLocatorService {
     const accessibilityIdCount = entries.filter(e => e.strategy === 'accessibility-id').length;
     const xpathCount = entries.filter(e => e.strategy === 'xpath').length;
     const otherCount = entries.length - accessibilityIdCount - xpathCount;
+    const criticalCount = entries.filter(e => e.severity === 'critical').length;
+    const healthScore = entries.length > 0 ? Math.round((accessibilityIdCount / entries.length) * 100) : 100;
+
+    // Build actionable patches for all non-ok entries
+    const actionablePatches = entries
+      .filter(e => e.suggestedReplacement !== null)
+      .map(e => ({ file: e.file, locatorName: e.locatorName, from: e.selector, to: e.suggestedReplacement! }));
 
     const report: LocatorAuditReport = {
+      schemaVersion: '2.0',
       totalLocators: entries.length,
       accessibilityIdCount,
       xpathCount,
       otherCount,
+      healthScore,
+      criticalCount,
       entries,
-      markdownReport: this.generateMarkdownReport(entries, accessibilityIdCount, xpathCount, otherCount)
+      markdownReport: this.generateMarkdownReport(entries, accessibilityIdCount, xpathCount, otherCount, healthScore, actionablePatches),
+      actionablePatches,
     };
 
     return report;
@@ -110,6 +129,9 @@ export class AuditLocatorService {
     let strategy: string;
     let severity: 'ok' | 'warning' | 'critical';
     let recommendation: string;
+    let suggestedReplacement: string | null = null;
+    let strategyPreference: LocatorAuditEntry['strategyPreference'] = null;
+    let patchDiff: string | null = null;
 
     if (selector.startsWith('~')) {
       strategy = 'accessibility-id';
@@ -118,29 +140,43 @@ export class AuditLocatorService {
     } else if (selector.startsWith('//')) {
       strategy = 'xpath';
       severity = 'critical';
-      recommendation = '🔴 BRITTLE — XPath will break on UI changes. Add testID/accessibility-id to the app source.';
+      // Derive the element name hint from the last portion of the XPath
+      const elementHint = selector.split('/').pop()?.replace(/\[.*?\]/g, '').replace(/[^a-zA-Z]/g, '') ?? 'element';
+      const suggestedId = `~${elementHint.charAt(0).toLowerCase()}${elementHint.slice(1)}`;
+      suggestedReplacement = suggestedId;
+      strategyPreference = 'accessibility-id';
+      patchDiff = `- ${locatorName}: '${selector}'\n+ ${locatorName}: '${suggestedId}'  // TODO: add testID="${elementHint.charAt(0).toLowerCase()}${elementHint.slice(1)}" to app source`;
+      recommendation = `🔴 BRITTLE — XPath will break on UI changes. Suggested fix: use '${suggestedId}' (requires adding testID/accessibilityIdentifier to app source).`;
     } else if (selector.includes(':id/')) {
       strategy = 'resource-id';
       severity = 'warning';
-      recommendation = '🟡 Acceptable — resource-id is stable but prefer accessibility-id for cross-platform.';
+      const idPart = selector.split(':id/').pop() ?? selector;
+      const suggestedId = `~${idPart.replace(/_/g, '').toLowerCase()}`;
+      suggestedReplacement = suggestedId;
+      strategyPreference = 'accessibility-id';
+      patchDiff = `- ${locatorName}: '${selector}'\n+ ${locatorName}: '${suggestedId}'  // preferred: add accessibility-id to app`;
+      recommendation = `🟡 Acceptable — resource-id is stable but prefer accessibility-id. Suggested: '${suggestedId}'.`;
     } else if (selector.startsWith('-ios')) {
       strategy = 'ios-predicate';
       severity = 'warning';
       recommendation = '🟡 iOS only — consider adding accessibility-id for cross-platform support.';
+      strategyPreference = 'accessibility-id';
     } else {
       strategy = 'other';
       severity = 'warning';
       recommendation = '🟡 Unknown strategy — verify this locator is stable across releases.';
     }
 
-    return { file, className, locatorName, strategy, selector, severity, recommendation };
+    return { file, className, locatorName, strategy, selector, severity, recommendation, suggestedReplacement, strategyPreference, patchDiff };
   }
 
   private generateMarkdownReport(
     entries: LocatorAuditEntry[],
     accessibilityIdCount: number,
     xpathCount: number,
-    otherCount: number
+    otherCount: number,
+    healthScore: number,
+    actionablePatches: Array<{ file: string; locatorName: string; from: string; to: string }>
   ): string {
     const lines: string[] = [
       '# 📊 Mobile Locator Audit Report',
@@ -153,7 +189,7 @@ export class AuditLocatorService {
       `| other | ${otherCount} | 🟡 Review |`,
       '',
       `**Total Locators**: ${entries.length}`,
-      `**Health Score**: ${entries.length > 0 ? Math.round((accessibilityIdCount / entries.length) * 100) : 0}% stable`,
+      `**Health Score**: ${healthScore}% stable`,
       '',
     ];
 
@@ -163,10 +199,10 @@ export class AuditLocatorService {
       lines.push('');
       lines.push('These locators will break when the UI changes. Ask developers to add `testID` (React Native) or `accessibilityIdentifier` (Swift/Kotlin) to these elements:');
       lines.push('');
-      lines.push('| File | Class | Locator | Selector |');
-      lines.push('|------|-------|---------|----------|');
+      lines.push('| File | Class | Locator | Selector | Suggested Replacement |');
+      lines.push('|------|-------|---------|----------|-----------------------|');
       for (const e of criticals) {
-        lines.push(`| ${e.file} | ${e.className} | ${e.locatorName} | \`${e.selector}\` |`);
+        lines.push(`| ${e.file} | ${e.className} | ${e.locatorName} | \`${e.selector}\` | \`${e.suggestedReplacement ?? 'add testID'}\` |`);
       }
       lines.push('');
     }
@@ -175,10 +211,25 @@ export class AuditLocatorService {
     if (warnings.length > 0) {
       lines.push('## 🟡 Warnings — Review Recommended');
       lines.push('');
-      lines.push('| File | Class | Locator | Strategy | Recommendation |');
-      lines.push('|------|-------|---------|----------|---------------|');
+      lines.push('| File | Class | Locator | Strategy | Suggested Replacement |');
+      lines.push('|------|-------|---------|----------|-----------------------|');
       for (const e of warnings) {
-        lines.push(`| ${e.file} | ${e.className} | ${e.locatorName} | ${e.strategy} | ${e.recommendation} |`);
+        lines.push(`| ${e.file} | ${e.className} | ${e.locatorName} | ${e.strategy} | ${e.suggestedReplacement ? `\`${e.suggestedReplacement}\`` : e.recommendation} |`);
+      }
+      lines.push('');
+    }
+
+    if (actionablePatches.length > 0) {
+      lines.push('## 🔧 Actionable Patches (Apply Directly)');
+      lines.push('');
+      lines.push('Copy these diffs to update your Page Objects. Remember to also add the corresponding `testID` / `accessibilityIdentifier` to the app source for XPath replacements.');
+      lines.push('');
+      for (const e of entries.filter(e => e.patchDiff !== null)) {
+        lines.push(`### \`${e.file}\` — \`${e.locatorName}\``);
+        lines.push('```diff');
+        lines.push(e.patchDiff!);
+        lines.push('```');
+        lines.push('');
       }
     }
 

@@ -76,7 +76,7 @@ export class ExecutionService {
                 stats = await this.parseReport(path.join(projectRoot, 'reports', 'cucumber-results.json'));
             }
             catch {
-                stats = { total: 0, passed: 0, failed: 0, skipped: 0 };
+                stats = { total: 0, passed: 0, failed: 0, skipped: 0, totalDurationMs: 0, scenarios: [] };
             }
             return {
                 success: true,
@@ -92,7 +92,7 @@ export class ExecutionService {
                 stats = await this.parseReport(path.join(projectRoot, 'reports', 'cucumber-results.json'));
             }
             catch {
-                stats = { total: 0, passed: 0, failed: 0, skipped: 0 };
+                stats = { total: 0, passed: 0, failed: 0, skipped: 0, totalDurationMs: 0, scenarios: [] };
             }
             // Auto-capture failure context from live session if available
             let failureContext;
@@ -174,7 +174,7 @@ export class ExecutionService {
         return elements;
     }
     /**
-     * Parses Cucumber JSON report for structured test stats.
+     * Parses Cucumber JSON report for structured test stats including scenario-level details.
      */
     async parseReport(reportPath) {
         try {
@@ -182,24 +182,49 @@ export class ExecutionService {
             const raw = await readFile(reportPath, 'utf8');
             const features = JSON.parse(raw);
             let total = 0, passed = 0, failed = 0, skipped = 0;
+            let totalDurationMs = 0;
+            const scenarios = [];
             for (const feature of features) {
                 for (const scenario of (feature.elements ?? [])) {
                     if (scenario.type !== 'scenario')
                         continue;
                     total++;
+                    let status = 'unknown';
+                    let durationMs = 0;
+                    let errorMessage;
                     const steps = scenario.steps ?? [];
+                    for (const step of steps) {
+                        const stepDuration = step.result?.duration ?? 0;
+                        // Cucumber JSON duration is usually in nanoseconds
+                        durationMs += Math.round(stepDuration / 1_000_000);
+                        if (step.result?.error_message && !errorMessage) {
+                            errorMessage = step.result.error_message;
+                        }
+                    }
                     if (steps.some((s) => s.result?.status === 'failed')) {
                         failed++;
+                        status = 'failed';
                     }
-                    else if (steps.some((s) => s.result?.status === 'skipped' || s.result?.status === 'undefined')) {
+                    else if (steps.some((s) => s.result?.status === 'skipped' || s.result?.status === 'undefined' || s.result?.status === 'pending')) {
                         skipped++;
+                        status = 'skipped';
                     }
-                    else {
+                    else if (steps.length > 0) {
                         passed++;
+                        status = 'passed';
                     }
+                    totalDurationMs += durationMs;
+                    scenarios.push({
+                        id: scenario.id,
+                        name: scenario.name,
+                        feature: feature.name,
+                        status,
+                        durationMs,
+                        error: errorMessage
+                    });
                 }
             }
-            return { total, passed, failed, skipped };
+            return { total, passed, failed, skipped, totalDurationMs, scenarios };
         }
         catch {
             return undefined;

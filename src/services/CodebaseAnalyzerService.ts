@@ -2,6 +2,26 @@ import path from 'path';
 import { Project, SyntaxKind, Node } from 'ts-morph';
 import fs from 'fs/promises';
 
+// ─── Summary Mode Types (Wave 1.1) ─────────────────────────────────────────
+export interface FileSummary {
+  path: string;        // relative to projectRoot
+  lines: number;
+  exports: string[];   // exported class / function / const names
+  imports: string[];   // module specifiers this file imports from
+}
+
+export interface CodebaseSummary {
+  schemaVersion: '1.0';
+  projectRoot: string;
+  scannedAt: string;
+  totalFiles: number;
+  totalLines: number;
+  architecture: string;
+  files: FileSummary[];
+  dependencyEdges: Array<{ from: string; to: string }>;
+  warnings: string[];
+}
+
 export type ArchitecturePattern = 'pom' | 'yaml-locators' | 'facade' | 'hybrid';
 
 export interface CodebaseAnalysisResult {
@@ -46,6 +66,96 @@ export interface CodebaseAnalysisResult {
 }
 
 export class CodebaseAnalyzerService {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Wave 1.1 — Lightweight summary mode (no file content dumped)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns compact structural metadata for the whole project.
+   * Safe for large codebases — never dumps file contents.
+   * Output: file tree, line counts, exported names, import graph.
+   */
+  public async analyzeSummary(projectRoot: string): Promise<CodebaseSummary> {
+    const warnings: string[] = [];
+    const tsFiles = await this.listFilesWithExtensions(projectRoot, ['.ts']);
+    const fileSummaries: FileSummary[] = [];
+    const dependencyEdges: Array<{ from: string; to: string }> = [];
+
+    const project = new Project({
+      compilerOptions: { strict: false },
+      skipAddingFilesFromTsConfig: true,
+    });
+
+    let totalLines = 0;
+    for (const f of tsFiles) {
+      if (f.includes('node_modules') || f.includes('dist') || f.endsWith('.d.ts')) continue;
+      project.addSourceFileAtPath(f);
+    }
+
+    for (const sf of project.getSourceFiles()) {
+      const abs = sf.getFilePath();
+      const rel = path.relative(projectRoot, abs).replace(/\\/g, '/');
+      const text = sf.getFullText();
+      const lines = text.split('\n').length;
+      totalLines += lines;
+
+      // Exported names only — no bodies
+      const exports: string[] = [];
+      for (const cls of sf.getClasses()) {
+        if (cls.isExported()) exports.push(`class:${cls.getName() ?? 'Anonymous'}`);
+      }
+      for (const fn of sf.getFunctions()) {
+        if (fn.isExported()) exports.push(`fn:${fn.getName() ?? 'anonymous'}`);
+      }
+      for (const vd of sf.getVariableDeclarations()) {
+        const stmt = vd.getVariableStatement();
+        if (stmt?.isExported()) exports.push(`const:${vd.getName()}`);
+      }
+      for (const iface of sf.getInterfaces()) {
+        if (iface.isExported()) exports.push(`interface:${iface.getName()}`);
+      }
+      for (const te of sf.getTypeAliases()) {
+        if (te.isExported()) exports.push(`type:${te.getName()}`);
+      }
+
+      // Import graph
+      const importSpecifiers: string[] = [];
+      for (const imp of sf.getImportDeclarations()) {
+        const spec = imp.getModuleSpecifierValue();
+        importSpecifiers.push(spec);
+        dependencyEdges.push({ from: rel, to: spec });
+      }
+
+      if (lines > 1000) {
+        warnings.push(`⚠️ ${rel} is ${lines} lines — consider splitting into smaller modules.`);
+      }
+
+      fileSummaries.push({ path: rel, lines, exports, imports: importSpecifiers });
+    }
+
+    // Detect architecture heuristically without re-analyzing
+    const hasYaml = (await this.listFilesWithExtensions(projectRoot, ['.yaml', '.yml']))
+      .some(f => !f.includes('node_modules') && !path.basename(f).includes('github') && !path.basename(f).includes('docker'));
+    const hasFacade = fileSummaries.some(f =>
+      f.exports.some(e => e.toLowerCase().includes('facade') || e.toLowerCase().includes('locatorservice'))
+    );
+    const arch = hasYaml && hasFacade ? 'yaml-locators' : hasYaml ? 'yaml-locators' : hasFacade ? 'facade' : 'pom';
+
+    return {
+      schemaVersion: '1.0',
+      projectRoot,
+      scannedAt: new Date().toISOString(),
+      totalFiles: fileSummaries.length,
+      totalLines,
+      architecture: arch,
+      files: fileSummaries,
+      dependencyEdges,
+      warnings,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   /**
    * Scans the project for existing BDD assets using ts-morph AST parsing.
    * Scans features/, step-definitions/, pages/, and utils/.
