@@ -31,7 +31,16 @@ export class ProjectSetupService {
     // 5. BasePage.ts
     this.scaffoldBasePage(projectRoot);
 
-    // 6. MobileGestures.ts
+    // 6. Utils Layer
+    this.scaffoldAppiumDriver(projectRoot);
+    this.scaffoldActionUtils(projectRoot);
+    this.scaffoldGestureUtils(projectRoot);
+    this.scaffoldWaitUtils(projectRoot);
+    this.scaffoldAssertionUtils(projectRoot);
+    this.scaffoldTestContext(projectRoot);
+    this.scaffoldDataUtils(projectRoot);
+    this.scaffoldLocatorUtils(projectRoot);
+    // Keep old for back compat
     this.scaffoldMobileGestures(projectRoot);
 
     // 7. MockServer.ts
@@ -76,19 +85,27 @@ export class ProjectSetupService {
         '  🔧 wdio.conf.ts'
       ]),
       '  📄 mcp-config.json',
-      '  🏗️  pages/BasePage.ts',
-      '  🤸 utils/MobileGestures.ts',
-      '  🔌 utils/MockServer.ts',
-      '  🪝 step-definitions/hooks.ts',
-      '  📝 features/sample.feature',
-      '  📊 test-data/mock-scenarios.json',
+      '  🏗️  src/pages/BasePage.ts',
+      '  🎬 src/utils/ActionUtils.ts',
+      '  🤸 src/utils/MobileGestures.ts',
+      '  ⏳ src/utils/WaitUtils.ts',
+      '  🔌 src/utils/MockServer.ts',
+      '  🏷️  src/utils/LocatorUtils.ts',
+      '  📁 src/locators/login.yaml',
+      '  🪝 src/step-definitions/hooks.ts',
+      '  📝 src/features/sample.feature',
+      '  📊 src/test-data/mock-scenarios.json',
       '  🚫 .gitignore',
       '',
       'Next steps:',
       '  1. cd ' + projectRoot,
       '  2. npm install',
-      '  3. Use check_environment to verify Appium setup',
-      '  4. Use generate_cucumber_pom to create tests'
+      '  3. Start Appium server (separate terminal): npx appium',
+      '  4. Use check_environment to verify Appium setup',
+      '  5. Update wdio.conf.ts with device name and app path',
+      '  6. Use start_appium_session to verify live connection',
+      '  7. Use generate_cucumber_pom to create tests',
+      '  8. Use validate_and_write to save, then run_cucumber_test'
     ].join('\n');
 
     return summary;
@@ -99,15 +116,22 @@ export class ProjectSetupService {
   private scaffoldPackageJson(projectRoot: string, appName: string, platform: string) {
     const scripts: Record<string, string> = {};
     if (platform === 'both') {
-      scripts["test"] = "npx wdio run wdio.shared.conf.ts";
-      scripts["test:android"] = "npx wdio run wdio.android.conf.ts";
-      scripts["test:ios"] = "npx wdio run wdio.ios.conf.ts";
+      scripts["test"]             = "npx wdio run wdio.shared.conf.ts";
+      scripts["test:android"]     = "npx wdio run wdio.android.conf.ts";
+      scripts["test:ios"]         = "npx wdio run wdio.ios.conf.ts";
+      scripts["test:smoke"]       = "npx wdio run wdio.shared.conf.ts --cucumberOpts.tagExpression='@smoke'";
+      scripts["test:regression"]  = "npx wdio run wdio.shared.conf.ts --cucumberOpts.tagExpression='@regression'";
+      scripts["test:e2e"]         = "npx wdio run wdio.shared.conf.ts --cucumberOpts.tagExpression='@e2e'";
+      scripts["test:smoke:android"] = "npx wdio run wdio.android.conf.ts --cucumberOpts.tagExpression='@smoke'";
+      scripts["test:smoke:ios"]   = "npx wdio run wdio.ios.conf.ts --cucumberOpts.tagExpression='@smoke'";
     } else {
-      scripts["test"] = "npx wdio run wdio.conf.ts";
+      scripts["test"]             = "npx wdio run wdio.conf.ts";
+      scripts["test:smoke"]       = "npx wdio run wdio.conf.ts --cucumberOpts.tagExpression='@smoke'";
+      scripts["test:regression"]  = "npx wdio run wdio.conf.ts --cucumberOpts.tagExpression='@regression'";
+      scripts["test:e2e"]         = "npx wdio run wdio.conf.ts --cucumberOpts.tagExpression='@e2e'";
       if (platform === 'android') scripts["test:android"] = "npx wdio run wdio.conf.ts";
-      if (platform === 'ios') scripts["test:ios"] = "npx wdio run wdio.conf.ts";
+      if (platform === 'ios')     scripts["test:ios"] = "npx wdio run wdio.conf.ts";
     }
-    scripts["test:smoke"] = scripts["test"] + " --cucumberOpts.tagExpression='@smoke'";
 
     const pkg = {
       name: appName.toLowerCase().replace(/\s+/g, '-'),
@@ -115,19 +139,33 @@ export class ProjectSetupService {
       type: 'module',
       scripts,
       dependencies: {
-        "@cucumber/cucumber": "^10.0.0",
-        "webdriverio": "^8.0.0",
-        "@wdio/cli": "^8.2.0",
-        "@wdio/local-runner": "^8.2.0",
-        "@wdio/cucumber-framework": "^8.2.0",
-        "@wdio/appium-service": "^8.2.0",
-        "ts-node": "^10.9.0",
-        "typescript": "^5.0.0",
-        "express": "^4.18.0"
+        // WebdriverIO core + Appium framework
+        "@wdio/cli":                 "8.29.1",
+        "@wdio/local-runner":        "8.29.1",
+        "@wdio/cucumber-framework":  "8.29.1",
+        "@wdio/appium-service":      "8.29.1",
+        "@wdio/spec-reporter":       "8.29.1",
+        "@wdio/allure-reporter":     "8.29.1",
+        "webdriverio":               "8.29.1",
+        // Appium server (local usage)
+        "appium":                    "2.5.1",
+        // Appium drivers — install both for cross-platform support
+        "@appium/uiautomator2-driver": "^3.7.0",
+        "@appium/xcuitest-driver":   "^7.22.0",
+        // Cucumber runner
+        "@cucumber/cucumber":        "10.3.2",
+        "@cucumber/pretty-formatter": "1.0.1",
+        // TypeScript runtime
+        "ts-node":                   "10.9.2",
+        "typescript":                "5.4.5",
+        // Utilities
+        "express":                   "^4.18.0",
+        "yaml":                      "^2.4.1",
+        "allure-cucumberjs":         "^3.0.0"
       },
       devDependencies: {
-        "@types/node": "^20.0.0",
-        "@types/express": "^4.17.0"
+        "@types/node":               "^20.0.0",
+        "@types/express":            "^4.17.0"
       }
     };
     this.writeIfNotExists(path.join(projectRoot, 'package.json'), JSON.stringify(pkg, null, 2));
@@ -155,6 +193,10 @@ export class ProjectSetupService {
         declarationMap: true,
         sourceMap: true
       },
+      "ts-node": {
+        esm: true,
+        experimentalSpecifierResolution: "node"
+      },
       include: ["src/**/*.ts", "wdio.conf.ts", "wdio.shared.conf.ts", "wdio.android.conf.ts", "wdio.ios.conf.ts"],
       exclude: ["node_modules", "dist", "reports"]
     };
@@ -164,7 +206,7 @@ export class ProjectSetupService {
   private scaffoldCucumberConfig(projectRoot: string) {
     const content = `// cucumber.js — Cucumber configuration
 export default {
-  requireModule: ['ts-node/register'],
+  requireModule: ['ts-node/esm'],
   require: ['src/step-definitions/**/*.ts'],
   format: [
     'progress-bar',
@@ -179,169 +221,26 @@ export default {
   }
 
   private scaffoldBasePage(projectRoot: string) {
-    const content = `import { browser, $ } from '@wdio/globals';
+    const content = `import { AppiumDriver } from '../utils/AppiumDriver.js';
+import { GestureUtils } from '../utils/GestureUtils.js';
+import { WaitUtils } from '../utils/WaitUtils.js';
+import { AssertionUtils } from '../utils/AssertionUtils.js';
 
-/**
- * BasePage — Abstract base for all Page Objects.
- * All page classes should extend this to inherit common mobile actions.
- */
 export abstract class BasePage {
-  /**
-   * Wait for an element to be displayed, then return it.
-   */
-  protected async waitForElement(selector: string, timeout: number = 10000) {
-    const element = await $(selector);
-    await element.waitForDisplayed({ timeout });
-    return element;
-  }
+  protected driver = AppiumDriver;
+  protected wait = WaitUtils;
+  protected gesture = GestureUtils;
+  protected assert = AssertionUtils;
 
-  /**
-   * Click an element after waiting for it to appear.
-   */
-  protected async click(selector: string) {
-    const element = await this.waitForElement(selector);
-    await element.click();
-  }
+  // Every page must implement this
+  abstract isLoaded(): Promise<boolean>;
 
-  /**
-   * Type text into an input field after clearing it.
-   */
-  protected async type(selector: string, value: string) {
-    const element = await this.waitForElement(selector);
-    await element.clearValue();
-    await element.setValue(value);
-  }
-
-  /**
-   * Get the text content of an element.
-   */
-  protected async getText(selector: string): Promise<string> {
-    const element = await this.waitForElement(selector);
-    return await element.getText();
-  }
-
-  /**
-   * Check if an element is currently displayed.
-   */
-  protected async isDisplayed(selector: string): Promise<boolean> {
-    try {
-      const element = await $(selector);
-      return await element.isDisplayed();
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Wait for the element to disappear.
-   */
-  protected async waitForElementGone(selector: string, timeout: number = 10000) {
-    const element = await $(selector);
-    await element.waitForDisplayed({ timeout, reverse: true });
-  }
-
-  // ─── WebView Context Switching ─────────────────────────
-
-  /**
-   * Switch to WebView context (for hybrid apps).
-   * Returns the WebView context name.
-   */
-  protected async switchToWebView(): Promise<string> {
-    const contexts = await browser.getContexts() as string[];
-    const webView = contexts.find(c => c.includes('WEBVIEW'));
-    if (!webView) throw new Error('No WebView context found. Available: ' + contexts.join(', '));
-    await browser.switchContext(webView);
-    return webView;
-  }
-
-  /**
-   * Switch back to NATIVE_APP context.
-   */
-  protected async switchToNativeContext(): Promise<void> {
-    await browser.switchContext('NATIVE_APP');
-  }
-
-  /**
-   * Get all available contexts (NATIVE_APP, WEBVIEW_xxx).
-   */
-  /**
-   * Get all available contexts (NATIVE_APP, WEBVIEW_xxx).
-   */
-  protected async getContexts(): Promise<string[]> {
-    return await browser.getContexts() as string[];
-  }
-
-  // ─── App Lifecycle Helpers ────────────────────────────
-
-  /**
-   * Open a deep link / URL scheme to navigate directly to a screen.
-   * Android: Uses 'mobile: deepLink'
-   * iOS: Uses 'mobile: deepLink' or 'driver.url()'
-   */
-  protected async openDeepLink(url: string) {
-    await browser.url(url);
-  }
-
-  /**
-   * Handle native permission dialogs (Allow/Deny).
-   * Common for Location, Camera, Notifications, Contacts, etc.
-   */
-  protected async handlePermissionDialog(accept: boolean = true) {
-    try {
-      const caps = browser.capabilities as any;
-      const isIOS = caps.platformName?.toLowerCase() === 'ios';
-
-      if (isIOS) {
-        // iOS permission alert
-        const btnLabel = accept ? 'Allow' : 'Don\\'t Allow';
-        const btn = await $(\`~\${btnLabel}\`);
-        if (await btn.isExisting()) await btn.click();
-      } else {
-        // Android permission dialog
-        const btnId = accept
-          ? 'com.android.permissioncontroller:id/permission_allow_button'
-          : 'com.android.permissioncontroller:id/permission_deny_button';
-        const btn = await $(\`id=\${btnId}\`);
-        if (await btn.isExisting()) await btn.click();
-      }
-    } catch {
-      // No permission dialog present — ignore
-    }
-  }
-
-  /**
-   * Simulate biometric authentication (Touch ID / Face ID / Fingerprint).
-   * Requires Appium to be started with --relaxed-security.
-   */
-  protected async simulateBiometric(success: boolean = true) {
-    const caps = browser.capabilities as any;
-    const isIOS = caps.platformName?.toLowerCase() === 'ios';
-
-    if (isIOS) {
-      await browser.execute('mobile: sendBiometricMatch', { type: 'touchId', match: success });
-    } else {
-      // Android fingerprint simulation
-      await browser.execute('mobile: fingerPrint', { fingerprintId: success ? 1 : 0 });
-    }
-  }
-
-  /**
-   * Put the app to background for a duration (seconds), then bring it back.
-   */
-  protected async backgroundApp(seconds: number = 3) {
-    await browser.execute('mobile: backgroundApp', { seconds });
-  }
-
-  /**
-   * Terminate and re-launch the app (cold start).
-   */
-  protected async restartApp(bundleId: string) {
-    await browser.execute('mobile: terminateApp', { bundleId });
-    await browser.execute('mobile: activateApp', { bundleId });
+  async waitForLoaded(timeout = 15000): Promise<void> {
+    await WaitUtils.waitForCondition(() => this.isLoaded(), timeout);
   }
 }
 `;
-    this.writeIfNotExists(path.join(projectRoot, 'pages', 'BasePage.ts'), content);
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'pages', 'BasePage.ts'), content);
   }
 
   private scaffoldMobileGestures(projectRoot: string) {
@@ -546,16 +445,74 @@ export class MockServer {
     fs.writeFileSync(path.join(projectRoot, 'src', 'utils', 'MockServer.ts'), content);
   }
 
+  private scaffoldLocatorUtils(projectRoot: string) {
+    const tsPath = path.join(projectRoot, 'src/utils/LocatorUtils.ts');
+    this.writeIfNotExists(tsPath, [
+      'import fs from "fs";',
+      'import path from "path";',
+      'import yaml from "yaml";',
+      'import { browser } from "@wdio/globals";',
+      '',
+      'export class LocatorUtils {',
+      '  /**',
+      '   * Reads a YAML locator file and returns the appropriate selector for the current platform.',
+      '   * Platform is resolved synchronously from driver capabilities at runtime.',
+      '   */',
+      '  public static getLocator(yamlFileName: string, locatorKey: string): string {',
+      '    // Read platform synchronously from WebdriverIO capabilities (set after session starts)',
+      '    const caps = browser.capabilities as Record<string, any>;',
+      '    const platformName = (caps?.platformName ?? \'\').toLowerCase();',
+      '    const platform = platformName === \'ios\' ? \'ios\' : \'android\';',
+      '',
+      '    const filePath = path.resolve(process.cwd(), "src/locators", `${yamlFileName}.yaml`);',
+      '    if (!fs.existsSync(filePath)) {',
+      '      throw new Error(`Locator file not found: ${filePath}`);',
+      '    }',
+      '',
+      '    const fileContent = fs.readFileSync(filePath, "utf8");',
+      '    const locators = yaml.parse(fileContent);',
+      '',
+      '    if (!locators[locatorKey]) {',
+      '      throw new Error(`Locator key "${locatorKey}" not found in ${filePath}`);',
+      '    }',
+      '',
+      '    const selector = locators[locatorKey][platform];',
+      '    if (!selector) {',
+      '      throw new Error(`No selector defined for platform "${platform}" on key "${locatorKey}" in ${filePath}`);',
+      '    }',
+      '',
+      '    return selector;',
+      '  }',
+      '}'
+    ].join('\n'));
+
+    const locatorsDir = path.join(projectRoot, 'src/locators');
+    if (!fs.existsSync(locatorsDir)) {
+      fs.mkdirSync(locatorsDir, { recursive: true });
+    }
+
+    const yamlPath = path.join(locatorsDir, 'login.yaml');
+    this.writeIfNotExists(yamlPath, [
+      'submit_button:',
+      '  android: id=com.example:id/submit',
+      '  ios: ~submitButton',
+      '',
+      'username_input:',
+      '  android: id=com.example:id/username',
+      '  ios: ~usernameInput'
+    ].join('\n'));
+  }
+
   private scaffoldHooks(projectRoot: string) {
     const content = `import { Before, After, BeforeAll, AfterAll, Status } from '@cucumber/cucumber';
-import { browser } from '@wdio/globals';
+import { AppiumDriver } from '../utils/AppiumDriver.js';
+import { TestContext } from '../utils/TestContext.js';
 
 /**
  * Cucumber Hooks — Lifecycle management for Appium sessions.
  */
 
 BeforeAll(async function () {
-  // Global setup — Appium session will be started by WebdriverIO config
   console.log('[Hooks] Test suite starting...');
 });
 
@@ -564,28 +521,31 @@ Before(async function (scenario) {
 });
 
 After(async function (scenario) {
-  // Capture screenshot on failure
   if (scenario.result?.status === Status.FAILED) {
     try {
-      const screenshot = await browser.takeScreenshot();
-      this.attach(screenshot, 'image/png');
-      console.log('[Hooks] Screenshot captured for failed scenario');
-
-      // Also log the page source for debugging
-      const pageSource = await browser.getPageSource();
-      this.attach(pageSource, 'text/xml');
-      console.log('[Hooks] Page source captured for failed scenario');
+      const screenshot = await AppiumDriver.takeScreenshot();
+      if (screenshot) {
+        TestContext.addAttachment('screenshot', Buffer.from(screenshot, 'base64'), 'image/png');
+        this.attach(Buffer.from(screenshot, 'base64'), 'image/png');
+      }
+      const pageSource = await AppiumDriver.getPageSource();
+      if (pageSource) {
+        TestContext.addAttachment('page-source', pageSource, 'text/xml');
+        this.attach(pageSource, 'text/xml');
+      }
+      console.log('[Hooks] Captured screenshot and page source for failed scenario');
     } catch (err) {
-      console.error('[Hooks] Failed to capture screenshot:', err);
+      console.error('[Hooks] Failed to capture artifacts:', err);
     }
   }
+  TestContext.clear();
 });
 
 AfterAll(async function () {
   console.log('[Hooks] Test suite complete.');
 });
 `;
-    this.writeIfNotExists(path.join(projectRoot, 'step-definitions', 'hooks.ts'), content);
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'step-definitions', 'hooks.ts'), content);
   }
 
   private scaffoldSampleFeature(projectRoot: string) {
@@ -602,7 +562,7 @@ Feature: Sample Login Flow
     And I tap the login button
     Then I should see the home screen
 `;
-    this.writeIfNotExists(path.join(projectRoot, 'features', 'sample.feature'), content);
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'features', 'sample.feature'), content);
   }
 
   private scaffoldGitignore(projectRoot: string) {
@@ -694,11 +654,6 @@ export const config: Options.Testrunner = {
 
   reporters: ['spec'],
 
-  services: ['appium'],
-  appium: {
-    args: ['--relaxed-security'],
-  },
-
   logLevel: 'info',
   waitforTimeout: 10000,
   connectionRetryTimeout: 120000,
@@ -737,10 +692,6 @@ export const config: Options.Testrunner = {
   },
 
   reporters: ['spec'],
-  services: ['appium'],
-  appium: {
-    args: ['--relaxed-security'],
-  },
 
   logLevel: 'info',
   waitforTimeout: 10000,
@@ -811,7 +762,280 @@ export const config = {
         body: { id: 1, name: "Test User", email: "test@example.com" }
       }
     }, null, 2);
-    this.writeIfNotExists(path.join(projectRoot, 'test-data', 'mock-scenarios.json'), content);
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'test-data', 'mock-scenarios.json'), content);
+  }
+
+  private scaffoldAppiumDriver(projectRoot: string) {
+    const content = `import { browser, $ } from '@wdio/globals';
+
+export class AppiumDriver {
+  static async find(selector: string) { return await $(selector); }
+
+  /** Synchronous platform check — valid after session has started. */
+  static isAndroid(): boolean {
+    return ((browser.capabilities as any)?.platformName ?? '').toLowerCase() === 'android';
+  }
+  static isIOS(): boolean {
+    return ((browser.capabilities as any)?.platformName ?? '').toLowerCase() === 'ios';
+  }
+
+  /** Async versions — prefer synchronous isAndroid()/isIOS() inside Page Object methods. */
+  static async getPageSource() { return await browser.getPageSource(); }
+  static async takeScreenshot(filePath?: string) {
+    const base64 = await browser.takeScreenshot();
+    if (filePath) require('fs').writeFileSync(filePath, base64, 'base64');
+    return base64;
+  }
+  static async openDeepLink(url: string) {
+    await browser.url(url);
+  }
+  static async handlePermissionDialog(accept: boolean) {
+    if (accept) await browser.acceptAlert().catch(() => {});
+    else await browser.dismissAlert().catch(() => {});
+  }
+  static async switchToWebView() {
+    const handles = await browser.getContexts();
+    const webview = handles.find((h: string) => h.startsWith('WEBVIEW'));
+    if (webview) await browser.switchContext(webview);
+  }
+  static async switchToNativeContext() {
+    await browser.switchContext('NATIVE_APP');
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'AppiumDriver.ts'), content);
+  }
+
+  private scaffoldActionUtils(projectRoot: string) {
+    const content = `import { $, $$ } from '@wdio/globals';
+
+/**
+ * ActionUtils — Core element interaction helpers for Appium mobile tests.
+ *
+ * Use these in Page Object methods instead of calling WebdriverIO APIs directly.
+ * This provides a single place to add retry logic, logging, or platform-specific
+ * workarounds without touching every Page Object.
+ */
+export class ActionUtils {
+  /**
+   * Tap an element by selector.
+   * Waits for the element to be displayed before tapping.
+   */
+  static async tap(selector: string, timeout = 10000) {
+    const el = await $(selector);
+    await el.waitForDisplayed({ timeout });
+    await el.click();
+  }
+
+  /**
+   * Double-tap an element by selector.
+   */
+  static async doubleTap(selector: string) {
+    const el = await $(selector);
+    await el.waitForDisplayed();
+    await el.doubleClick();
+  }
+
+  /**
+   * Type text into a field by selector.
+   * Waits for the element, clears existing value, then types.
+   */
+  static async type(selector: string, text: string, timeout = 10000) {
+    const el = await $(selector);
+    await el.waitForDisplayed({ timeout });
+    await el.clearValue();
+    await el.setValue(text);
+  }
+
+  /**
+   * Clear the value of an input field by selector.
+   */
+  static async clear(selector: string) {
+    const el = await $(selector);
+    await el.waitForDisplayed();
+    await el.clearValue();
+  }
+
+  /**
+   * Clear an input field and type new text (convenience wrapper for type).
+   */
+  static async clearAndType(selector: string, text: string) {
+    await ActionUtils.type(selector, text);
+  }
+
+  /**
+   * Tap the first element that contains the given visible text.
+   * Uses cross-platform accessibility text matching.
+   */
+  static async tapByText(text: string) {
+    // Try accessibility id first, then XPath as fallback
+    const byA11y = await \`~\${text}\`;
+    const els = await $$(\`*[\${byA11y}]\`);
+    if (els.length > 0) {
+      await els[0].click();
+      return;
+    }
+    const byXpath = await \`//*[@text='\${text}' or @label='\${text}' or @name='\${text}']\`;
+    const el = await $(byXpath);
+    await el.waitForDisplayed();
+    await el.click();
+  }
+
+  /**
+   * Tap the Nth element matching a selector (0-indexed).
+   * Useful for lists where multiple elements share the same selector.
+   */
+  static async tapByIndex(selector: string, index: number) {
+    const els = await $$(selector);
+    if (index >= els.length) {
+      throw new Error(\`tapByIndex: only \${els.length} elements found for "\${selector}", index \${index} out of range\`);
+    }
+    await els[index].waitForDisplayed();
+    await els[index].click();
+  }
+
+  /**
+   * Get the visible text of an element.
+   */
+  static async getText(selector: string): Promise<string> {
+    const el = await $(selector);
+    await el.waitForDisplayed();
+    return el.getText();
+  }
+
+  /**
+   * Get the value attribute of an input element.
+   */
+  static async getValue(selector: string): Promise<string> {
+    const el = await $(selector);
+    return el.getValue();
+  }
+
+  /**
+   * Check if an element is currently displayed on screen.
+   */
+  static async isDisplayed(selector: string): Promise<boolean> {
+    try {
+      const el = await $(selector);
+      return el.isDisplayed();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if an element is enabled (not greyed out).
+   */
+  static async isEnabled(selector: string): Promise<boolean> {
+    const el = await $(selector);
+    return el.isEnabled();
+  }
+
+  /**
+   * Dismiss the software keyboard.
+   */
+  static async hideKeyboard() {
+    try {
+      await (global as any).driver.hideKeyboard();
+    } catch {
+      // Keyboard may not be visible — ignore
+    }
+  }
+
+  /**
+   * Tap the device Back button (Android only).
+   */
+  static async tapBack() {
+    await (global as any).driver.back();
+  }
+
+  /**
+   * Tap an element and wait for a different element to appear.
+   * Used for transitions where the result element confirms the navigation succeeded.
+   */
+  static async tapAndWait(tapSelector: string, waitForSelector: string, timeout = 10000) {
+    await ActionUtils.tap(tapSelector);
+    const target = await $(waitForSelector);
+    await target.waitForDisplayed({ timeout });
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'ActionUtils.ts'), content);
+  }
+
+  private scaffoldGestureUtils(projectRoot: string) {
+    const content = `import { browser, $ } from '@wdio/globals';
+
+export class GestureUtils {
+  static async scrollDown() {
+    await browser.execute('mobile: scroll', { direction: 'down' });
+  }
+  static async swipeLeft(selector?: string) {
+    await browser.execute('mobile: swipe', { direction: 'left', element: selector ? (await $(selector)).elementId : undefined });
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'GestureUtils.ts'), content);
+  }
+
+  private scaffoldWaitUtils(projectRoot: string) {
+    const content = `import { browser, $ } from '@wdio/globals';
+
+export class WaitUtils {
+  static async waitForDisplayed(selector: string, timeout = 10000) {
+    await (await $(selector)).waitForDisplayed({ timeout });
+  }
+  static async waitForCondition(fn: () => Promise<boolean>, timeout = 15000, pollInterval = 500) {
+    await browser.waitUntil(fn, { timeout, interval: pollInterval });
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'WaitUtils.ts'), content);
+  }
+
+  private scaffoldAssertionUtils(projectRoot: string) {
+    const content = `import { browser, $ } from '@wdio/globals';
+
+export class AssertionUtils {
+  static async assertDisplayed(selector: string, message?: string) {
+    const isDisplayed = await (await $(selector)).isDisplayed();
+    if (!isDisplayed) throw new Error(message || \`Element \${selector} is not displayed.\`);
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'AssertionUtils.ts'), content);
+  }
+
+  private scaffoldTestContext(projectRoot: string) {
+    const content = `export class TestContext {
+  private static state: Map<string, any> = new Map();
+  private static attachments: any[] = [];
+
+  static set<T>(key: string, value: T) { this.state.set(key, value); }
+  static get<T>(key: string): T | undefined { return this.state.get(key) as T; }
+  static require<T>(key: string): T {
+    if (!this.state.has(key)) throw new Error(\`Missing context key: \${key}\`);
+    return this.state.get(key) as T;
+  }
+  static clear() { this.state.clear(); this.attachments = []; }
+  static addAttachment(name: string, data: any, mimeType: string) {
+    this.attachments.push({ name, data, mimeType });
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'TestContext.ts'), content);
+  }
+
+  private scaffoldDataUtils(projectRoot: string) {
+    const content = `export class DataUtils {
+  static getEnv(key: string, fallback?: string) { return process.env[key] || fallback; }
+  static requireEnv(key: string) {
+    if (!process.env[key]) throw new Error(\`Missing required env variable: \${key}\`);
+    return process.env[key] as string;
+  }
+}
+`;
+    this.writeIfNotExists(path.join(projectRoot, 'src', 'utils', 'DataUtils.ts'), content);
   }
 
   // ─── Helpers ───────────────────────────────────────────────

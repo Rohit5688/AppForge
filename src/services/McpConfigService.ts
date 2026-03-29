@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { McpConfigError } from '../utils/Errors.js';
-
+import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
+import { Questioner } from '../utils/Questioner.js';
 export interface McpConfig {
   $schema?: string;
   version?: string;
@@ -9,6 +9,7 @@ export interface McpConfig {
     language: string;
     testFramework: string;
     client: string;
+    executionCommand?: string;
   };
   mobile: {
     defaultPlatform: string;
@@ -56,7 +57,7 @@ export class McpConfigService {
   public read(projectRoot: string): McpConfig {
     const configPath = path.join(projectRoot, this.configFileName);
     if (!fs.existsSync(configPath)) {
-      throw new McpConfigError(`Configuration file not found at ${configPath}. Please run setup_project first.`);
+      throw new AppForgeError(ErrorCode.E008_PRECONDITION_FAIL, `Configuration file not found at ${configPath}. Please run setup_project first.`, ["Run setup_project"]);
     }
 
     try {
@@ -74,7 +75,14 @@ export class McpConfigService {
       raw.paths = resolvePaths(raw);
       return raw as McpConfig;
     } catch (error: any) {
-      throw new McpConfigError(`Failed to parse mcp-config.json: ${error.message}`);
+      if (error instanceof SyntaxError) {
+        Questioner.clarify(
+          "Config appears corrupt. Reset to defaults or view the file?",
+          "mcp-config.json failed to parse as valid JSON. It may have a trailing comma or missing brace.",
+          ["Reset to defaults", "View file to fix manually"]
+        );
+      }
+      throw new AppForgeError(ErrorCode.E005_CONFIG_CORRUPT, `Failed to parse mcp-config.json: ${error.message}`, ["Fix the JSON syntax error in mcp-config.json"]);
     }
   }
 
@@ -125,6 +133,13 @@ export class McpConfigService {
   }
 
   public updateAppPath(projectRoot: string, platform: 'android' | 'ios', appPath: string): void {
+    if (!fs.existsSync(appPath) && !appPath.startsWith('http')) {
+      Questioner.clarify(
+        `File not found at ${appPath}. Save path anyway (for CI), or provide correct path?`,
+        `The appPath provided for platform ${platform} does not exist on disk.`,
+        ["Save path anyway (I'll do it manually)", "I will provide a corrected path"]
+      );
+    }
     const config = this.read(projectRoot);
     for (const profileName in config.mobile.capabilitiesProfiles) {
       const profile = config.mobile.capabilitiesProfiles[profileName];

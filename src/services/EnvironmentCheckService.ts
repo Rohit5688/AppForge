@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import { Questioner } from '../utils/Questioner.js';
 
 const execAsync = promisify(exec);
 
@@ -31,7 +32,15 @@ export class EnvironmentCheckService {
     checks.push(await this.checkNode());
 
     // 2. Appium Server
-    checks.push(await this.checkAppiumServer());
+    const appiumCheck = await this.checkAppiumServer();
+    checks.push(appiumCheck);
+    if (appiumCheck.status === 'warn' && appiumCheck.message.includes('1.x')) {
+      Questioner.clarify(
+        "Migrate to Appium 2.x?",
+        "Appium 1.x detected. Appium 1 is deprecated and lacks W3C compliance required for modern automation.",
+        ["Yes (npm install -g appium@latest)", "No, keep 1.x"]
+      );
+    }
 
     // 3. Appium CLI / drivers
     checks.push(await this.checkAppiumDrivers(platform));
@@ -90,7 +99,9 @@ export class EnvironmentCheckService {
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
-            if (json.value?.ready) {
+            if (json.value?.build?.version?.startsWith('1.')) {
+              resolve({ name: 'Appium Server', status: 'warn', message: `Running Appium 1.x (${json.value.build.version})`, fixHint: 'Upgrade to Appium 2.x:\n  npm install -g appium@latest' });
+            } else if (json.value?.ready) {
               resolve({ name: 'Appium Server', status: 'pass', message: 'Running on localhost:4723' });
             } else {
               resolve({ name: 'Appium Server', status: 'warn', message: 'Server responded but not ready', fixHint: 'Restart Appium:\n  npx appium' });
@@ -138,12 +149,19 @@ export class EnvironmentCheckService {
   private async checkAndroidEmulator(): Promise<EnvironmentCheck> {
     try {
       const { stdout } = await execAsync('adb devices');
-      const lines = stdout.trim().split('\n').slice(1).filter(l => l.includes('device'));
+      const lines = stdout.trim().split('\n').slice(1).filter(l => l.includes('device') && !l.includes('offline'));
       if (lines.length > 0) {
         return { name: 'Android Device', status: 'pass', message: `${lines.length} device(s) connected` };
       }
+      
+      Questioner.clarify(
+        "No device detected. Do you want help starting an emulator?",
+        "adb devices returned no connected devices or emulators.",
+        ["Yes — show AVD list", "No — I'll connect manually"]
+      );
       return { name: 'Android Device', status: 'fail', message: 'No devices connected', fixHint: 'Start an emulator:\n  emulator -avd <avd_name>\n\nOr connect a physical device via USB with USB debugging enabled.\nList available AVDs: emulator -list-avds' };
-    } catch {
+    } catch (e: any) {
+      if (e instanceof Error && e.name === 'ClarificationRequired') throw e;
       return { name: 'Android Device', status: 'fail', message: 'adb not found', fixHint: 'Add Android SDK platform-tools to PATH:\n  Windows: %ANDROID_HOME%\\platform-tools\n  macOS/Linux: $ANDROID_HOME/platform-tools' };
     }
   }

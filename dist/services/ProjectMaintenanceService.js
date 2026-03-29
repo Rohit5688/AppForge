@@ -2,8 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { UtilAuditService } from './UtilAuditService.js';
+import { Questioner } from '../utils/Questioner.js';
 const execAsync = promisify(exec);
+import { ProjectSetupService } from './ProjectSetupService.js';
 export class ProjectMaintenanceService {
+    utilAuditService = new UtilAuditService();
+    projectSetupService = new ProjectSetupService();
     /**
      * Idempotent tool to upgrade project dependencies and structural aspects.
      */
@@ -16,7 +21,7 @@ export class ProjectMaintenanceService {
         // 2. Upgrade dependencies
         try {
             logs.push("Updating core dependencies...");
-            await execAsync('npm install webdriverio@latest @cucumber/cucumber@latest', { cwd: projectRoot });
+            await execAsync('npm install webdriverio@latest @cucumber/cucumber@latest @wdio/cli@latest @wdio/local-runner@latest @wdio/cucumber-framework@latest @wdio/appium-service@latest @wdio/spec-reporter@latest', { cwd: projectRoot });
             logs.push("✅ Core dependencies updated to latest.");
         }
         catch (error) {
@@ -37,6 +42,9 @@ export class ProjectMaintenanceService {
             // Add version tag if missing
             const raw = fs.readFileSync(configPath, 'utf8');
             const config = JSON.parse(raw);
+            if (config.paths && Object.keys(config.paths).length > 0) {
+                Questioner.clarify("Custom paths detected in mcp-config.json. Should upgrade overwrite paths to defaults?", "You have custom paths configured. Upgrading might reset or impact them depending on the new defaults.", ["Yes, overwrite to defaults", "No, keep my custom paths"]);
+            }
             if (!config.version) {
                 config.version = '1.0.0';
                 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -50,7 +58,38 @@ export class ProjectMaintenanceService {
                 logs.push('   > Run `setup_project` with `platform: "both"` to auto-generate the new split configuration files!');
             }
         }
+        try {
+            const audit = await this.utilAuditService.audit(projectRoot);
+            logs.push(`\n📊 Utility Coverage: ${audit.coveragePercent}%`);
+            if (audit.missing.length > 0) {
+                logs.push(`⚠️ Missing recommended utilities:`);
+                audit.actionableSuggestions.forEach(s => logs.push(`   - ${s}`));
+            }
+        }
+        catch (e) {
+            // ignore
+        }
+        try {
+            logs.push("Verifying project structure...");
+            await this.repairProject(projectRoot, "android");
+            logs.push("✅ Standard scaffolding files verified/repaired.");
+        }
+        catch (e) {
+            logs.push("⚠️ Could not verify standard files structure.");
+        }
         const summary = logs.join('\n');
         return summary;
+    }
+    /**
+     * Safe to run at any time — only generates files that are missing and never overwrites existing ones.
+     */
+    async repairProject(projectRoot, platform = 'android') {
+        try {
+            await this.projectSetupService.setup(projectRoot, platform, 'RepairedApp');
+            return "✅ Project repair completed. Missing baseline files were regenerated.";
+        }
+        catch (error) {
+            throw new Error(`Failed to repair project: ${error.message}`);
+        }
     }
 }

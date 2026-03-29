@@ -1,5 +1,7 @@
 import { remote } from 'webdriverio';
 import { McpConfigService } from './McpConfigService.js';
+import { Questioner } from '../utils/Questioner.js';
+import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
 /**
  * AppiumSessionService — Manages a live WebdriverIO + Appium session.
  * Enables the MCP server to connect to a real device/emulator, fetch live
@@ -44,16 +46,17 @@ export class AppiumSessionService {
         catch (error) {
             const msg = error.message || String(error);
             if (msg.includes('ECONNREFUSED')) {
-                throw new Error(`Cannot connect to Appium at ${serverUrl}. ` +
+                throw new AppForgeError(ErrorCode.E002_DEVICE_OFFLINE, `Cannot connect to Appium at ${serverUrl}. ` +
                     `Make sure Appium is running:\n  npx appium\n` +
-                    `Or start it with a specific port:\n  npx appium --port 4723`);
+                    `Or start it with a specific port:\n  npx appium --port 4723`, ["Start Appium on localhost:4723"]);
             }
             if (msg.includes('session not created') || msg.includes('Could not start')) {
-                throw new Error(`Appium session creation failed. Check:\n` +
-                    `1. Is an emulator/simulator running? (adb devices / xcrun simctl list)\n` +
-                    `2. Is the app installed? (app path: ${capabilities['appium:app'] ?? 'not set'})\n` +
-                    `3. Are the capabilities correct?\n` +
-                    `Raw error: ${msg}`);
+                throw new AppForgeError(ErrorCode.E001_NO_SESSION, `Appium session creation failed.\n` +
+                    `Raw error: ${msg}`, [
+                    "Is an emulator/simulator running? (adb devices / xcrun simctl list)",
+                    `Is the app installed? (app path: ${capabilities['appium:app'] ?? 'not set'})`,
+                    "Are the capabilities correct?"
+                ]);
             }
             throw error;
         }
@@ -104,10 +107,34 @@ export class AppiumSessionService {
         return await this.driver.execute(`mobile: ${command}`, args);
     }
     /**
-     * Returns current session status.
+     * BUG-06 FIX: Returns true only if driver reference exists AND the session is
+     * still alive on the Appium server. Previously returned this.driver !== null,
+     * which lies when the device disconnects or the Appium server crashes.
+     *
+     * Sync fast-path: returns false immediately if driver is null.
+     * For a definitive live check, use isSessionAlive() (async).
      */
     isSessionActive() {
         return this.driver !== null;
+    }
+    /**
+     * Async liveness ping — confirms the session is genuinely alive on the server.
+     * Use this before any critical operation to avoid misleading session-not-found errors.
+     */
+    async isSessionAlive() {
+        if (!this.driver)
+            return false;
+        try {
+            // getStatus() calls the Appium /status endpoint — fast, no side effects.
+            // If the server or device is gone, this throws immediately.
+            await this.driver.getStatus();
+            return true;
+        }
+        catch {
+            // Session is dead — clean up the stale reference so future callers get false
+            this.driver = null;
+            return false;
+        }
     }
     /**
      * Cleanly terminates the Appium session.
@@ -149,6 +176,12 @@ export class AppiumSessionService {
         const activeBuild = this.configService.getActiveBuild(config);
         if (activeBuild?.appPath) {
             caps['appium:app'] = activeBuild.appPath;
+        }
+        if (!caps['appium:app'] && !caps['appium:noReset'] && caps.browserName !== 'Chrome' && caps.browserName !== 'Safari') {
+            Questioner.clarify("No app or browser specified in capabilities. Provide path to .apk/.ipa, or choose 'noReset: true' for already-installed app?", "Appium requires an 'appium:app' path, a 'browserName', or 'appium:noReset' to start a session.", ["Provide path to app", "Use noReset (app already installed)", "Set browserName (e.g. Chrome, Safari)"]);
+        }
+        if (caps.platformName?.toLowerCase() === 'ios' && caps['appium:noReset'] && !caps['appium:bundleId'] && !caps['appium:app']) {
+            Questioner.clarify("iOS bundleId missing. What is the bundle identifier of your app?", "When starting an iOS test without reinstalling the app (noReset: true), Appium requires the 'appium:bundleId' (e.g., com.apple.Preferences) to launch the app.", ["Provide bundleId"]);
         }
         return caps;
     }

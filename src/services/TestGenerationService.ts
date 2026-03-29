@@ -83,11 +83,13 @@ ${existingUtilsSummary}
 
 1. **BDD Triad**: Generate a Gherkin \`.feature\` file, a \`.steps.ts\` file, and a \`.page.ts\` file.
 2. **Strict POM**: ALL locators and driver commands belong ONLY inside Page Object methods. Step definitions MUST call page methods only.
-3. **Page Classes extend BasePage**: Import and extend \`BasePage\` from \`../pages/BasePage\`.
-4. **Locators**: Use accessibility-id (\`~id\`) as the PRIMARY strategy. Fall back to \`resource-id\` or \`xpath\` only when necessary.
-5. **Reuse**: If an existing step or page method matches, DO NOT create a new one. Reference the existing one and explain in \`reusePlan\`.
-6. **Mobile Gestures**: Import \`MobileGestures\` from \`../utils/MobileGestures\` for swipe, longPress, scrollToText, handleAlert.
-7. **API Mocking**: If the test requires specific backend state, use \`MockServer\` from \`../utils/MockServer\`.
+3. **Page Classes**: ${analysis.existingPageObjects.some(p => p.className === 'BasePage') ? 'Import and extend \\`BasePage\\` from \\`../pages/BasePage\\`.' : 'Export a simple class. Do NOT try to extend BasePage if it does not exist in the project.'}
+4. **Locators Strategy**: If \`LocatorUtils\` exists in the utility classes, YOU MUST store locators in \`src/locators/<feature>.yaml\` and fetch them using \`LocatorUtils.getLocator('<feature>', 'key')\` in the Page Object. If LocatorUtils does NOT exist, follow the project's current locator strategy.
+5. **Locators Rules**: Use accessibility-id (\`~id\`) as the PRIMARY strategy. AVOID xpath or css selectors unless absolutely necessary, as they lead to flaky mobile automation. Fall back to \`resource-id\` (Android) or \`-ios predicate string\` (iOS) before resorting to xpath.
+6. **Reuse**: If an existing step or page method matches, DO NOT create a new one. Reference the existing one and explain in \`reusePlan\`.
+7. **Mobile Gestures**: Import \`MobileGestures\` from \`../utils/MobileGestures\` for swipe, longPress, scrollToText, handleAlert.
+8. **Action Utilities**: Import \`ActionUtils\` from \`../utils/ActionUtils\` for all element interactions: \`ActionUtils.tap(selector)\`, \`ActionUtils.type(selector, text)\`, \`ActionUtils.clear(selector)\`, \`ActionUtils.tapByText(text)\`, \`ActionUtils.tapByIndex(selector, n)\`, \`ActionUtils.tapAndWait(tap, waitFor)\`, \`ActionUtils.hideKeyboard()\`, \`ActionUtils.tapBack()\`. Do NOT call \`$(selector).click()\` or \`$(selector).setValue()\` directly inside Page Objects — always go through ActionUtils.
+8. **API Mocking**: If the test requires specific backend state, use \`MockServer\` from \`../utils/MockServer\`.
 8. **Tags**: Add appropriate tags (\`@smoke\`, \`@android\`, \`@ios\`, \`@regression\`).
 9. **Data-Driven**: If the scenario involves multiple users/values, use a Scenario Outline with an Examples table.
 10. **WebView Screens**: If the test involves a WebView (embedded browser, payment form, settings page), use \`this.switchToWebView()\` before interacting with web elements and \`this.switchToNativeContext()\` to return to native.

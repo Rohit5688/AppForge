@@ -1,6 +1,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import { McpConfigService } from './McpConfigService.js';
+import { Questioner } from '../utils/Questioner.js';
 const execAsync = promisify(exec);
 export class ExecutionService {
     sessionService = null;
@@ -14,36 +16,65 @@ export class ExecutionService {
      */
     async runTest(projectRoot, options) {
         try {
+            const configService = new McpConfigService();
+            let config;
+            try {
+                config = configService.read(projectRoot);
+            }
+            catch {
+                config = null;
+            }
+            let command = '';
+            if (options?.overrideCommand) {
+                command = options.overrideCommand;
+            }
+            else if (config?.project.executionCommand) {
+                command = config.project.executionCommand;
+            }
+            else {
+                Questioner.clarify("No default test script found in mcp-config.json. What command runs your tests? (e.g., npm run test)", "run_cucumber_test needs to know how to execute the suite. You can provide an overrideCommand via arguments or define executionCommand in mcp-config.json.", ["npm run test", "npx wdio run wdio.conf.ts", "npm run e2e:android"]);
+            }
             const fs = await import('fs');
+            // We only append specific arguments if we're dealing with a wdio execution command natively
+            // Otherwise we just run the custom execution command as-is
+            if (!command)
+                throw new Error("Missing execution command.");
+            const parts = command.split(' ');
             let configName = 'wdio.conf.ts';
-            if (options?.platform) {
+            const isWdio = command.includes('wdio');
+            if (isWdio && options?.platform) {
                 const specificConfig = `wdio.${options.platform}.conf.ts`;
                 if (fs.existsSync(path.join(projectRoot, specificConfig))) {
                     configName = specificConfig;
+                    // Replace generic wdio.conf.ts with specific if it exists in the command
+                    const index = parts.findIndex(p => p.includes('wdio.conf.ts'));
+                    if (index !== -1)
+                        parts[index] = specificConfig;
                 }
             }
-            const parts = ['npx', 'wdio', 'run', configName];
             // Apply tag filtering via wdio cucumberOpts
             let tagExpression = options?.tags || '';
-            // If we fall back to generic monolithic config but user wants a specific platform,
-            // we still need to filter via @android or @ios tags for the generic run to work correctly.
-            if (options?.platform && configName === 'wdio.conf.ts') {
-                const platformTag = `@${options.platform}`;
+            if (isWdio) {
+                // If we fall back to generic monolithic config but user wants a specific platform,
+                // we still need to filter via @android or @ios tags for the generic run to work correctly.
+                if (options?.platform && configName === 'wdio.conf.ts') {
+                    const platformTag = `@${options.platform}`;
+                    if (tagExpression) {
+                        tagExpression = `(${tagExpression}) and ${platformTag}`;
+                    }
+                    else {
+                        tagExpression = platformTag;
+                    }
+                }
                 if (tagExpression) {
-                    tagExpression = `(${tagExpression}) and ${platformTag}`;
+                    parts.push(`--cucumberOpts.tagExpression="${tagExpression}"`);
                 }
-                else {
-                    tagExpression = platformTag;
+                // Additional args
+                if (options?.specificArgs) {
+                    parts.push(options.specificArgs);
                 }
             }
-            if (tagExpression) {
-                parts.push(`--cucumberOpts.tagExpression="${tagExpression}"`);
-            }
-            // Additional args
-            if (options?.specificArgs) {
-                parts.push(options.specificArgs);
-            }
-            const command = parts.join(' ');
+            command = parts.join(' ');
             const { stdout, stderr } = await execAsync(command, {
                 cwd: projectRoot,
                 env: { ...process.env, FORCE_COLOR: '0' },

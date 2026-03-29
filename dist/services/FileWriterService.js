@@ -4,6 +4,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { auditGeneratedCode, auditFeatureFile } from '../utils/SecurityUtils.js';
+import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
 const execAsync = promisify(exec);
 export class FileWriterService {
     /**
@@ -31,12 +32,10 @@ export class FileWriterService {
             if (!validation.valid) {
                 // Clean up staging
                 await this.cleanStaging(stagingDir);
-                return JSON.stringify({
-                    success: false,
-                    phase: 'validation',
-                    errors: validation.errors,
-                    hint: 'Fix the TypeScript errors and call validate_and_write again.'
-                }, null, 2);
+                throw new AppForgeError(ErrorCode.E006_TS_COMPILE_FAIL, "TypeScript compilation failed during validation.", [
+                    "Review the tsc output below and fix the generated TypeScript files.",
+                    ...validation.errors
+                ]);
             }
         }
         // Step 3: Validate .feature files (basic Gherkin syntax)
@@ -183,12 +182,40 @@ export class FileWriterService {
     // ─── Private Validators ───────────────────────────────────
     async validateTypeScript(projectRoot, stagingDir, tsFiles) {
         try {
-            // Check if tsconfig exists in project root
+            // BUG-05 FIX: Previously used `tsc --project projectRoot/tsconfig.json` with
+            // file paths pointing into .mcp-staging/. This causes tsc to resolve relative
+            // imports from the staging path, failing on valid `import '../pages/BasePage'`
+            // because there's no pages/ dir inside staging. Mitigation: write a minimal
+            // tsconfig into staging that extends the real one and redirects rootDir/baseUrl
+            // to the project root so all cross-file imports resolve correctly.
             const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
             const hasTsConfig = fs.existsSync(tsconfigPath);
+            // Write a patched tsconfig into the staging dir
+            const stagingTsconfigPath = path.join(stagingDir, 'tsconfig.json');
+            if (hasTsConfig) {
+                const stagingTsconfig = {
+                    extends: tsconfigPath,
+                    compilerOptions: {
+                        // Resolve imports relative to projectRoot so `../pages/BasePage` works
+                        baseUrl: projectRoot,
+                        rootDir: projectRoot,
+                        noEmit: true
+                    },
+                    // Include staging files + project source for cross-reference
+                    include: [
+                        path.join(stagingDir, '**/*.ts'),
+                        path.join(projectRoot, '**/*.ts')
+                    ],
+                    exclude: [
+                        path.join(projectRoot, 'node_modules'),
+                        path.join(projectRoot, '.mcp-staging')
+                    ]
+                };
+                fs.writeFileSync(stagingTsconfigPath, JSON.stringify(stagingTsconfig, null, 2), 'utf8');
+            }
             const filePaths = tsFiles.map(f => path.join(stagingDir, f.path)).join(' ');
             const cmd = hasTsConfig
-                ? `npx tsc --noEmit --project "${tsconfigPath}" ${filePaths}`
+                ? `npx tsc --noEmit --project "${stagingTsconfigPath}"`
                 : `npx tsc --noEmit --strict --esModuleInterop --skipLibCheck ${filePaths}`;
             await execAsync(cmd, { cwd: projectRoot });
             return { valid: true, errors: [] };

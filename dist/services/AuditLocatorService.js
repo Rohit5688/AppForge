@@ -19,10 +19,20 @@ export class AuditLocatorService {
                 for (const cls of sourceFile.getClasses()) {
                     const className = cls.getName() ?? 'AnonymousClass';
                     const relPath = path.relative(projectRoot, sourceFile.getFilePath());
+                    // BUG-08 FIX: Match all common WDIO selector call styles:
+                    //   $('sel')              — WDIO shorthand (original, still supported)
+                    //   driver.$('sel')       — WDIO v8 explicit driver reference
+                    //   browser.$('sel')      — WDIO browser global
+                    //   driver.findElement()  — W3C WebDriver API
+                    // Previously only $(...) was scanned — any modern project using driver.$ or
+                    // browser.$ returned 0 locators making the audit completely useless.
+                    const SELECTOR_PATTERN = /(?:(?:driver|browser)\.)?\$\(\s*['"`](.+?)['"`]\s*\)/;
+                    const SELECTOR_PATTERN_ALL = /(?:(?:driver|browser)\.)?\$\(\s*['"`](.+?)['"`]\s*\)/g;
+                    const FIND_ELEMENT_PATTERN = /(?:driver|browser)\.findElement\s*\(\s*['"`]?([^)]+?)['"`]?\s*\)/g;
                     // Scan getters
                     for (const getter of cls.getGetAccessors()) {
                         const body = getter.getBody()?.getText() ?? '';
-                        const match = body.match(/\$\(\s*['"`](.+?)['"`]\s*\)/);
+                        const match = body.match(SELECTOR_PATTERN);
                         if (match) {
                             entries.push(this.classifyEntry(relPath, className, getter.getName(), match[1]));
                         }
@@ -30,17 +40,19 @@ export class AuditLocatorService {
                     // Scan properties  
                     for (const prop of cls.getProperties()) {
                         const initializer = prop.getInitializer()?.getText() ?? '';
-                        const match = initializer.match(/\$\(\s*['"`](.+?)['"`]\s*\)/);
+                        const match = initializer.match(SELECTOR_PATTERN);
                         if (match) {
                             entries.push(this.classifyEntry(relPath, className, prop.getName(), match[1]));
                         }
                     }
-                    // Scan method bodies for inline selectors
+                    // Scan method bodies for inline selectors (all WDIO patterns + findElement)
                     for (const method of cls.getMethods()) {
                         const body = method.getBody()?.getText() ?? '';
-                        const inlineMatches = body.matchAll(/\$\(\s*['"`](.+?)['"`]\s*\)/g);
-                        for (const m of inlineMatches) {
+                        for (const m of body.matchAll(SELECTOR_PATTERN_ALL)) {
                             entries.push(this.classifyEntry(relPath, className, `${method.getName()}() inline`, m[1]));
+                        }
+                        for (const m of body.matchAll(FIND_ELEMENT_PATTERN)) {
+                            entries.push(this.classifyEntry(relPath, className, `${method.getName()}() findElement`, m[1]));
                         }
                     }
                 }

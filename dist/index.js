@@ -12,7 +12,10 @@ import { CredentialService } from "./services/CredentialService.js";
 import { AuditLocatorService } from "./services/AuditLocatorService.js";
 import { SummarySuiteService } from "./services/SummarySuiteService.js";
 import { EnvironmentCheckService } from "./services/EnvironmentCheckService.js";
+import { UtilAuditService } from "./services/UtilAuditService.js";
 import { CiWorkflowService } from "./services/CiWorkflowService.js";
+import { ClarificationRequired, Questioner } from "./utils/Questioner.js";
+import { AppForgeError } from "./utils/ErrorCodes.js";
 import { LearningService } from "./services/LearningService.js";
 import { RefactoringService } from "./services/RefactoringService.js";
 import { BugReportService } from "./services/BugReportService.js";
@@ -40,6 +43,7 @@ class AppiumMcpServer {
     auditLocatorService = new AuditLocatorService();
     summarySuiteService = new SummarySuiteService();
     environmentCheckService = new EnvironmentCheckService();
+    utilAuditService = new UtilAuditService();
     ciWorkflowService = new CiWorkflowService();
     learningService = new LearningService();
     refactoringService = new RefactoringService();
@@ -82,6 +86,18 @@ class AppiumMcpServer {
                         type: "object",
                         properties: {
                             projectRoot: { type: "string" }
+                        },
+                        required: ["projectRoot"]
+                    }
+                },
+                {
+                    name: "repair_project",
+                    description: "Repair and restore missing baseline files after a partial or interrupted setup_project run. Safe to run at any time — only generates files that are missing and never overwrites existing ones.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            projectRoot: { type: "string" },
+                            platform: { type: "string", enum: ["android", "ios", "both"], description: "Platform hint used when regenerating mcp-config.json. Defaults to android." }
                         },
                         required: ["projectRoot"]
                     }
@@ -132,10 +148,22 @@ class AppiumMcpServer {
                             projectRoot: { type: "string" },
                             testDescription: { type: "string" },
                             testName: { type: "string" },
-                            screenXml: { type: "string", description: "Optional: Live XML hierarchy dump from an Appium session." },
-                            screenshotBase64: { type: "string", description: "Optional: Base64 encoded screenshot image for visual context." }
+                            screenXml: { type: "string" },
+                            screenshotBase64: { type: "string" }
                         },
                         required: ["projectRoot", "testDescription"]
+                    }
+                },
+                {
+                    name: "audit_utils",
+                    description: "Audit existing utilities layer to detect missing Appium API wrappers. Custom-wrapper-aware: methods from shared packages (e.g. @company/appium-helpers) are counted as present.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            projectRoot: { type: "string" },
+                            customWrapperPackage: { type: "string", description: "Optional package name for a shared helper lib (e.g. '@myorg/appium-base'). Methods from this package are counted as present and not flagged as missing." }
+                        },
+                        required: ["projectRoot"]
                     }
                 },
                 {
@@ -429,9 +457,20 @@ class AppiumMcpServer {
                 const args = request.params.arguments;
                 switch (request.params.name) {
                     case "setup_project":
+                        // BUG-10 FIX: Previously a single Questioner.clarify() asked about both
+                        // missing fields at once, causing partial args to be discarded on retry.
+                        // Now we ask about each missing field independently so provided args persist.
+                        if (!args.platform) {
+                            Questioner.clarify("What platform are you targeting?", "setup_project requires a target platform to scaffold the correct config files.", ["android", "ios", "both"]);
+                        }
+                        if (!args.appName) {
+                            Questioner.clarify("What is your app name?", "setup_project requires an app name to name the generated config and project files.", ["e.g. MyApp, ShoppingApp, BankingApp"]);
+                        }
                         return this.textResult(await this.projectSetupService.setup(args.projectRoot, args.platform, args.appName));
                     case "upgrade_project":
                         return this.textResult(await this.projectMaintenanceService.upgradeProject(args.projectRoot));
+                    case "repair_project":
+                        return this.textResult(await this.projectMaintenanceService.repairProject(args.projectRoot, args.platform));
                     case "manage_config":
                         if (args.operation === "read") {
                             return this.textResult(JSON.stringify(this.configService.read(args.projectRoot), null, 2));
@@ -453,9 +492,21 @@ class AppiumMcpServer {
                         const config = this.configService.read(args.projectRoot);
                         const paths = this.configService.getPaths(config);
                         const analysis = await this.analyzerService.analyze(args.projectRoot, paths);
+                        if (analysis.existingPageObjects.length === 0) {
+                            Questioner.clarify("No page objects detected. Are you starting a fresh project, or is your paths config wrong?", `The codebase analyzer found 0 page objects in ${paths.pagesRoot}.`, ["Fresh project (generate my first PO)", "Wrong path (let me update mcp-config.json)"]);
+                        }
                         const learningPrompt = this.learningService.getKnowledgePromptInjection(args.projectRoot);
                         const prompt = this.generationService.generateAppiumPrompt(args.projectRoot, args.testDescription, config, analysis, args.testName, learningPrompt, args.screenXml, args.screenshotBase64);
                         return this.textResult(prompt);
+                    }
+                    case "audit_utils": {
+                        // BUG-12 FIX: Pass customWrapperPackage so methods from shared helper
+                        // packages (e.g. @company/appium-helpers) are counted as present.
+                        const result = await this.utilAuditService.audit(args.projectRoot, args.customWrapperPackage);
+                        return this.textResult(JSON.stringify({
+                            msg: "🔧 Util coverage suggestions",
+                            ...result
+                        }, null, 2));
                     }
                     case "validate_and_write":
                         return this.textResult(await this.fileWriterService.validateAndWrite(args.projectRoot, args.files, 3, args.dryRun));
@@ -565,8 +616,35 @@ class AppiumMcpServer {
                         throw new Error(`Unknown tool: ${request.params.name}`);
                 }
             }
-            catch (error) {
-                return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
+            catch (err) {
+                if (err instanceof ClarificationRequired) {
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    action: 'CLARIFICATION_REQUIRED',
+                                    question: err.question,
+                                    context: err.context,
+                                    options: err.options ?? []
+                                }, null, 2)
+                            }]
+                    };
+                }
+                if (err instanceof AppForgeError) {
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    action: 'ERROR',
+                                    code: err.code,
+                                    message: err.message,
+                                    remediation: err.remediation
+                                }, null, 2)
+                            }],
+                        isError: true
+                    };
+                }
+                return { content: [{ type: "text", text: `Error: ${err.message || String(err)}` }], isError: true };
             }
         });
     }

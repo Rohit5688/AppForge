@@ -18,6 +18,22 @@ export interface CodebaseAnalysisResult {
     path: string;
     publicMethods: string[];
   }[];
+  /**
+   * BUG-04 FIX: Page Registry / AppManager pattern.
+   * Registries are classes whose properties instantiate other page classes
+   * (e.g. class AppManager { loginPage = new LoginPage(driver); }).
+   * When detected, generators MUST use the registry variable
+   * (e.g. `this.app.loginPage`) instead of instantiating a new class.
+   */
+  pageRegistries?: {
+    className: string;        // e.g. 'AppManager'
+    path: string;             // relative file path
+    registryVar?: string;     // conventional accessor name, e.g. 'app'
+    pages: {
+      propertyName: string;   // e.g. 'loginPage'
+      pageClass: string;      // e.g. 'LoginPage'
+    }[];
+  }[];
 }
 
 export class CodebaseAnalyzerService {
@@ -87,6 +103,43 @@ export class CodebaseAnalyzerService {
             locators
           });
         }
+      }
+
+      // BUG-04 FIX: Page Registry / AppManager pattern detection.
+      const registries: NonNullable<typeof result.pageRegistries> = [];
+      const knownPageClassNames = new Set(result.existingPageObjects.map(p => p.className));
+
+      for (const sourceFile of project.getSourceFiles()) {
+        const relPath = path.relative(projectRoot, sourceFile.getFilePath()).replace(/\\/g, '/');
+        for (const cls of sourceFile.getClasses()) {
+          const className = cls.getName() || '';
+          const pageInsts: { propertyName: string; pageClass: string }[] = [];
+
+          for (const prop of cls.getProperties()) {
+            const init = prop.getInitializer();
+            if (!init) continue;
+            const initText = init.getText();
+            const newMatch = initText.match(/^new\s+([A-Z][\w]*)\s*\(/);
+            if (newMatch) {
+              const instClass = newMatch[1] ?? '';
+              const looksLikePage =
+                instClass.toLowerCase().endsWith('page') ||
+                instClass.toLowerCase().endsWith('screen') ||
+                instClass.toLowerCase().endsWith('component') ||
+                knownPageClassNames.has(instClass);
+              if (looksLikePage) pageInsts.push({ propertyName: prop.getName(), pageClass: instClass });
+            }
+          }
+
+          if (pageInsts.length >= 2) {
+            const registryVar = className.charAt(0).toLowerCase() + className.slice(1);
+            registries.push({ className, path: relPath, registryVar, pages: pageInsts });
+          }
+        }
+      }
+
+      if (registries.length > 0) {
+        result.pageRegistries = registries;
       }
     }
 

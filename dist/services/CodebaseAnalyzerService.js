@@ -58,6 +58,39 @@ export class CodebaseAnalyzerService {
                     });
                 }
             }
+            // BUG-04 FIX: Page Registry / AppManager pattern detection.
+            const registries = [];
+            const knownPageClassNames = new Set(result.existingPageObjects.map(p => p.className));
+            for (const sourceFile of project.getSourceFiles()) {
+                const relPath = path.relative(projectRoot, sourceFile.getFilePath()).replace(/\\/g, '/');
+                for (const cls of sourceFile.getClasses()) {
+                    const className = cls.getName() || '';
+                    const pageInsts = [];
+                    for (const prop of cls.getProperties()) {
+                        const init = prop.getInitializer();
+                        if (!init)
+                            continue;
+                        const initText = init.getText();
+                        const newMatch = initText.match(/^new\s+([A-Z][\w]*)\s*\(/);
+                        if (newMatch) {
+                            const instClass = newMatch[1] ?? '';
+                            const looksLikePage = instClass.toLowerCase().endsWith('page') ||
+                                instClass.toLowerCase().endsWith('screen') ||
+                                instClass.toLowerCase().endsWith('component') ||
+                                knownPageClassNames.has(instClass);
+                            if (looksLikePage)
+                                pageInsts.push({ propertyName: prop.getName(), pageClass: instClass });
+                        }
+                    }
+                    if (pageInsts.length >= 2) {
+                        const registryVar = className.charAt(0).toLowerCase() + className.slice(1);
+                        registries.push({ className, path: relPath, registryVar, pages: pageInsts });
+                    }
+                }
+            }
+            if (registries.length > 0) {
+                result.pageRegistries = registries;
+            }
         }
         // 4. Discover Utils using AST
         const utilFiles = await this.listFilesAbsolute(utilsDir, '.ts');
