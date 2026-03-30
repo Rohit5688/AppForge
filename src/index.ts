@@ -34,10 +34,10 @@ import { executeSandbox } from "./services/SandboxEngine.js";
 import type { SandboxApiRegistry } from "./services/SandboxEngine.js";
 
 /**
- * Appium Cucumber POM MCP Server
+ * AppForge — Mobile Automation MCP Server
  * Orchestrates Mobile Automation (Android/iOS) using WebdriverIO + Cucumber
  */
-class AppiumMcpServer {
+class AppForgeServer {
   private server: Server;
   private projectSetupService = new ProjectSetupService();
   private configService = new McpConfigService();
@@ -232,10 +232,10 @@ class AppiumMcpServer {
           inputSchema: {
             type: "object",
             properties: {
-              xmlDump: { type: "string" },
+              xmlDump: { type: "string", description: "Optional: Appium XML page source. When omitted, live XML is fetched automatically from the active session." },
               screenshotBase64: { type: "string" }
             },
-            required: ["xmlDump"]
+            required: []
           }
         },
         {
@@ -578,7 +578,22 @@ class AppiumMcpServer {
           }
 
           case "inspect_ui_hierarchy": {
-            const result = await this.executionService.inspectHierarchy(args.xmlDump, args.screenshotBase64 ?? '');
+            // If xmlDump not provided, auto-fetch live page source from the active session.
+            let liveXml = args.xmlDump;
+            if (!liveXml && this.appiumSessionService.isSessionActive()) {
+              liveXml = await this.appiumSessionService.getPageSource();
+            }
+            if (!liveXml) {
+              return {
+                content: [{ type: 'text' as const, text: JSON.stringify({
+                  code: 'NO_XML_SOURCE',
+                  message: 'No xmlDump provided and no active Appium session. Either pass xmlDump or call start_appium_session first.',
+                  hint: 'Start a session with start_appium_session, then call inspect_ui_hierarchy without arguments to get live XML.'
+                }, null, 2) }],
+                isError: true
+              };
+            }
+            const result = await this.executionService.inspectHierarchy(liveXml, args.screenshotBase64 ?? '');
             return this.textResult(JSON.stringify(result, null, 2));
           }
 
@@ -785,16 +800,23 @@ class AppiumMcpServer {
     });
   }
 
-  private validateArgs(args: any, required: string[]) {
-    for (const req of required) {
-      if (!args || typeof args !== 'object' || !(req in args)) {
-        return {
-          content: [{ type: "text" as const, text: `Missing required argument: ${req}` }],
-          isError: true
-        };
-      }
-    }
-    return null;
+  private validateArgs(args: Record<string, any>, requiredFields: string[]) {
+    const missing = requiredFields.filter(
+      f => args[f] === undefined || args[f] === null || args[f] === ''
+    );
+    if (missing.length === 0) return null;
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({
+          code: 'VALIDATION_ERROR',
+          message: `Missing required argument(s): ${missing.join(', ')}`,
+          invalidFields: missing,
+          hint: 'Provide all required fields and retry.'
+        }, null, 2)
+      }],
+      isError: true as const
+    };
   }
 
   private textResult(text: string) {
@@ -837,5 +859,5 @@ class AppiumMcpServer {
   }
 }
 
-const server = new AppiumMcpServer();
+const server = new AppForgeServer();
 server.run().catch(console.error);

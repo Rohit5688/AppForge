@@ -46,11 +46,11 @@ export class TestGenerationService {
       : '  (none found)';
 
     const conflictsWarning = analysis.conflicts.length > 0
-      ? `\n## ΓÜá∩╕Å STEP CONFLICTS DETECTED\nThe following step patterns are duplicated across files. DO NOT create any of these:\n${analysis.conflicts.map(c => `- \`${c.pattern}\` (in: ${c.files.join(', ')})`).join('\n')}\n`
+      ? `\n## ⚠️ STEP CONFLICTS DETECTED\nThe following step patterns are duplicated across files. DO NOT create any of these:\n${analysis.conflicts.map(c => `- \`${c.pattern}\` (in: ${c.files.join(', ')})`).join('\n')}\n`
       : '';
 
     const aliasesWarning = analysis.importAliases && Object.keys(analysis.importAliases).length > 0
-      ? `\n## ≡ƒöä TYPESCRIPT IMPORT ALIASES (tsconfig.json)\nDo NOT use deep relative paths (e.g. '../../pages/Login'). You MUST map imports to these aliases:\n\`\`\`json\n${JSON.stringify(analysis.importAliases, null, 2)}\n\`\`\`\n`
+      ? `\n## 🧰 TYPESCRIPT IMPORT ALIASES (tsconfig.json)\nDo NOT use deep relative paths (e.g. '../../pages/Login'). You MUST map imports to these aliases:\n\`\`\`json\n${JSON.stringify(analysis.importAliases, null, 2)}\n\`\`\`\n`
       : '';
 
     // Decide output file type based on architecture
@@ -143,9 +143,9 @@ DO NOT include any text outside the JSON block. DO NOT use markdown code fences 
     const arch = analysis.architecturePattern;
 
     if (arch === 'yaml-locators' || arch === 'facade') {
-      const yamlFiles = analysis.yamlLocatorFiles?.join(', ') || '(none yet ΓÇö create new ones)';
+      const yamlFiles = analysis.yamlLocatorFiles?.join(', ') || '(none yet — create new ones)';
       return `
-## STRICT RULES ΓÇö YAML LOCATOR ARCHITECTURE (Detected: ${arch})
+## STRICT RULES — YAML LOCATOR ARCHITECTURE (Detected: ${arch})
 
 This project uses **YAML-based locator files** with a resolver function. Follow this pattern EXACTLY:
 
@@ -174,7 +174,7 @@ username_field:
 
     if (arch === 'hybrid') {
       return `
-## STRICT RULES ΓÇö HYBRID ARCHITECTURE (Detected: ${arch})
+## STRICT RULES — HYBRID ARCHITECTURE (Detected: ${arch})
 
 This project uses BOTH Page Object classes AND YAML locator files. Follow the EXISTING pattern:
 
@@ -197,7 +197,7 @@ This project uses BOTH Page Object classes AND YAML locator files. Follow the EX
       : "15. **Environment Setup**: Do NOT inject `import 'dotenv/config';`. Use the project's native configuration strategy as inferred from existing Page Objects or Utility helpers.";
 
     return `
-## STRICT RULES ΓÇö PAGE OBJECT MODEL (Detected: ${arch})
+## STRICT RULES — PAGE OBJECT MODEL (Detected: ${arch})
 
 1. **BDD Triad**: Generate a Gherkin \`.feature\` file, a \`.steps.ts\` file, and a \`.page.ts\` file.
 2. **Strict POM**: ALL locators and driver commands belong ONLY inside Page Object methods. Step definitions MUST call page methods only.

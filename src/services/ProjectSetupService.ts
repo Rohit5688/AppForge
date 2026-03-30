@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 export class ProjectSetupService {
@@ -10,65 +11,76 @@ export class ProjectSetupService {
       fs.mkdirSync(projectRoot, { recursive: true });
     }
 
-    // 1. Create directory structure
-    const dirs = ['src/features', 'src/step-definitions', 'src/pages', 'src/utils', 'src/test-data', 'src/config', 'reports'];
-    for (const dir of dirs) {
-      const fullPath = path.join(projectRoot, dir);
-      if (!fs.existsSync(fullPath)) {
-        fs.mkdirSync(fullPath, { recursive: true });
+    // Atomic Staging: scaffold all files into a temp directory first.
+    // Only copy to projectRoot on full success — prevents corrupt half-projects on failure.
+    const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'appforge-'));
+    try {
+      // 1. Create directory structure in staging
+      const dirs = ['src/features', 'src/step-definitions', 'src/pages', 'src/utils', 'src/test-data', 'src/config', 'reports'];
+      for (const dir of dirs) {
+        fs.mkdirSync(path.join(stagingDir, dir), { recursive: true });
       }
+
+      // 2. package.json
+      this.scaffoldPackageJson(stagingDir, appName, platform);
+
+      // 3. tsconfig.json
+      this.scaffoldTsConfig(stagingDir);
+
+      // 4. cucumber.js config
+      this.scaffoldCucumberConfig(stagingDir);
+
+      // 5. BasePage.ts
+      this.scaffoldBasePage(stagingDir);
+
+      // 6. Utils Layer
+      this.scaffoldAppiumDriver(stagingDir);
+      this.scaffoldActionUtils(stagingDir);
+      this.scaffoldGestureUtils(stagingDir);
+      this.scaffoldWaitUtils(stagingDir);
+      this.scaffoldAssertionUtils(stagingDir);
+      this.scaffoldTestContext(stagingDir);
+      this.scaffoldDataUtils(stagingDir);
+      this.scaffoldLocatorUtils(stagingDir);
+      // Keep old for back compat
+      this.scaffoldMobileGestures(stagingDir);
+
+      // 7. MockServer.ts
+      this.scaffoldMockServer(stagingDir);
+
+      // 8. Before/After hooks
+      this.scaffoldHooks(stagingDir);
+
+      // 9. Sample feature
+      this.scaffoldSampleFeature(stagingDir);
+
+      // 10. .gitignore
+      this.scaffoldGitignore(stagingDir);
+
+      // 11. mcp-config.json (with paths field matching McpConfig interface)
+      this.scaffoldMcpConfig(stagingDir, platform);
+
+      // 12. wdio.conf.ts — WebdriverIO + Appium connection config
+      if (platform === 'both') {
+        this.scaffoldWdioSharedConfig(stagingDir);
+        this.scaffoldWdioAndroidConfig(stagingDir);
+        this.scaffoldWdioIosConfig(stagingDir);
+      } else {
+        this.scaffoldWdioConfig(stagingDir, platform);
+      }
+
+      // 13. Mock scenarios sample JSON
+      this.scaffoldMockScenarios(stagingDir);
+
+      // ── Commit: atomically copy staging dir to the real projectRoot ──
+      this.copyDirRecursive(stagingDir, projectRoot);
+
+    } finally {
+      // Always clean up the staging directory, even on failure
+      try {
+        fs.rmSync(stagingDir, { recursive: true, force: true });
+      } catch { /* ignore cleanup errors — OS will reclaim temp dir on restart */ }
     }
-
-    // 2. package.json
-    this.scaffoldPackageJson(projectRoot, appName, platform);
-
-    // 3. tsconfig.json
-    this.scaffoldTsConfig(projectRoot);
-
-    // 4. cucumber.js config
-    this.scaffoldCucumberConfig(projectRoot);
-
-    // 5. BasePage.ts
-    this.scaffoldBasePage(projectRoot);
-
-    // 6. Utils Layer
-    this.scaffoldAppiumDriver(projectRoot);
-    this.scaffoldActionUtils(projectRoot);
-    this.scaffoldGestureUtils(projectRoot);
-    this.scaffoldWaitUtils(projectRoot);
-    this.scaffoldAssertionUtils(projectRoot);
-    this.scaffoldTestContext(projectRoot);
-    this.scaffoldDataUtils(projectRoot);
-    this.scaffoldLocatorUtils(projectRoot);
-    // Keep old for back compat
-    this.scaffoldMobileGestures(projectRoot);
-
-    // 7. MockServer.ts
-    this.scaffoldMockServer(projectRoot);
-
-    // 8. Before/After hooks
-    this.scaffoldHooks(projectRoot);
-
-    // 9. Sample feature
-    this.scaffoldSampleFeature(projectRoot);
-
-    // 10. .gitignore
-    this.scaffoldGitignore(projectRoot);
-
-    // 11. mcp-config.json (with paths field matching McpConfig interface)
-    this.scaffoldMcpConfig(projectRoot, platform);
-
-    // 12. wdio.conf.ts — WebdriverIO + Appium connection config
-    if (platform === 'both') {
-      this.scaffoldWdioSharedConfig(projectRoot);
-      this.scaffoldWdioAndroidConfig(projectRoot);
-      this.scaffoldWdioIosConfig(projectRoot);
-    } else {
-      this.scaffoldWdioConfig(projectRoot, platform);
-    }
-
-    // 13. Mock scenarios sample JSON
-    this.scaffoldMockScenarios(projectRoot);
 
     const summary = [
       `✅ Scaffolded Appium BDD project at ${projectRoot}`,
@@ -1039,6 +1051,28 @@ export class AssertionUtils {
   }
 
   // ─── Helpers ───────────────────────────────────────────────
+
+  /**
+   * Atomically copies a directory tree from src to dest.
+   * Respects writeIfNotExists semantics: skips files that already exist in dest,
+   * preserving any user customisations on re-runs.
+   */
+  private copyDirRecursive(src: string, dest: string): void {
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+      if (entry.isDirectory()) {
+        if (!fs.existsSync(destPath)) {
+          fs.mkdirSync(destPath, { recursive: true });
+        }
+        this.copyDirRecursive(srcPath, destPath);
+      } else if (!fs.existsSync(destPath)) {
+        // Never overwrite — respect user customisations on re-run
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
+  }
 
   private writeIfNotExists(filePath: string, content: string) {
     if (!fs.existsSync(filePath)) {

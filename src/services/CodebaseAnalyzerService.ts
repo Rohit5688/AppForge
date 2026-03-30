@@ -80,6 +80,12 @@ export interface CodebaseAnalysisResult {
     keys: string[];
   };
   packageScripts?: Record<string, string>;
+  /**
+   * AST quality warnings collected during analysis.
+   * Populated by ASTScrutinizer when lazy scaffolding (TODO/empty methods) is detected.
+   * Forwarded to the LLM prompt so it can flag or reject low-quality files.
+   */
+  warnings?: string[];
 }
 
 export class CodebaseAnalyzerService {
@@ -188,6 +194,7 @@ export class CodebaseAnalyzerService {
       conflicts: [],
       architecturePattern: 'pom',
       yamlLocatorFiles: [],
+      warnings: [],
       detectedPaths: {
         featuresRoot: customPaths?.featuresRoot ?? 'features',
         stepsRoot: customPaths?.stepsRoot ?? 'step-definitions',
@@ -222,11 +229,11 @@ export class CodebaseAnalyzerService {
         const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, '/');
         const codeContent = sourceFile.getFullText();
 
-        // Phase 8: Scrutinize for lazy logic
+        // Phase 8: Scrutinize for lazy logic — surface warnings to the LLM prompt
         try {
           ASTScrutinizer.scrutinize(codeContent, relativePath);
         } catch (e: any) {
-          // Pass logic through but flag as warning if needed. Here we just let it execute to check syntax primarily.
+          result.warnings!.push(`[ASTScrutinizer] ${e.message}`);
         }
 
         const steps = this.extractStepsAST(sourceFile);
