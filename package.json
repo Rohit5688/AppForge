@@ -3,16 +3,31 @@
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
+  "description": "Enterprise-grade MCP Server for orchestrated mobile automation (Android/iOS) using WebdriverIO and Cucumber BDD.",
+  "author": "ForgeTest AI",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ForgeTest-AI/AppForge.git"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "npm run build && node --test dist/tests/"
+    "test": "npm run build && node --test dist/tests/",
+    "build:macos": "pkg . --targets node18-macos-arm64,node18-macos-x64 --out-path binaries",
+    "build:win": "pkg . --targets node18-win-x64 --out-path binaries"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "appium",
+    "webdriverio",
+    "cucumber",
+    "mobile-automation",
+    "ai",
+    "qa"
+  ],
   "dependencies": {
     "@cucumber/cucumber": "^12.7.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -24,6 +39,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "pkg": "^5.8.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

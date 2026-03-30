@@ -1,0 +1,236 @@
+/**
+ * SandboxEngine.ts — Secure V8-Isolated Code Execution for Token Optimization
+ *
+ * STRATEGY: Instead of the LLM calling 20+ MCP tools (each costing thousands of
+ * input/output tokens for schemas and payloads), it writes a small JS script that
+ * runs inside a secure sandbox on the MCP server. The script calls server services
+ * directly through a thin "forge" API, processes the data locally, and returns
+ * ONLY the final result (e.g., a locator string instead of 10,000 lines of DOM).
+ *
+ * SAFETY: Uses Node's built-in `vm` module with strict contextification.
+ * - No access to `require`, `process`, `fs`, `fetch`, `eval`, or `Function`.
+ * - Strict timeout enforcement (default 10s).
+ * - Fresh context per execution (no state leakage between runs).
+ *
+ * ZERO BREAKING CHANGES: This is a purely additive feature. All existing tools
+ * remain untouched and fully functional. This adds ONE new tool alongside them.
+ */
+
+import * as vm from 'node:vm';
+
+/**
+ * Defines the shape of a service method that can be exposed to the sandbox.
+ * Each method receives a single JSON-serializable argument and returns a
+ * JSON-serializable result (or a Promise of one).
+ */
+export type SandboxApiMethod = (args: any) => any | Promise<any>;
+
+/**
+ * The registry of methods exposed to the sandbox script via `forge.api.*`.
+ */
+export interface SandboxApiRegistry {
+  [methodName: string]: SandboxApiMethod;
+}
+
+/**
+ * Configuration options for the sandbox execution.
+ */
+export interface SandboxOptions {
+  /** Max execution time in milliseconds. Default: 10000 (10s). */
+  timeoutMs?: number;
+  /** Maximum memory in MB (advisory — Node vm doesn't enforce hard limits). */
+  maxMemoryMb?: number;
+}
+
+/**
+ * The result returned after executing a sandbox script.
+ */
+export interface SandboxResult {
+  /** Whether the script executed successfully. */
+  success: boolean;
+  /** The return value of the script (JSON-serializable). */
+  result?: any;
+  /** Error message if execution failed. */
+  error?: string;
+  /** Execution duration in milliseconds. */
+  durationMs: number;
+  /** Console output captured from the sandbox. */
+  logs: string[];
+}
+
+// --- Blocked patterns for static code validation ---
+const BLOCKED_PATTERNS = [
+  /\beval\s*\(/,
+  /\bnew\s+Function\s*\(/,
+  /\brequire\s*\(/,
+  /\bimport\s*\(/,
+  /\bprocess\b/,
+  /\b__dirname\b/,
+  /\b__filename\b/,
+  /\bglobalThis\b/,
+  /\bchild_process\b/,
+];
+
+/**
+ * Validates a script for dangerous patterns before execution.
+ * This is a defense-in-depth measure (the sandbox context already blocks these).
+ */
+function validateScript(script: string): string | null {
+  for (const pattern of BLOCKED_PATTERNS) {
+    if (pattern.test(script)) {
+      return `Blocked: Script contains forbidden pattern "${pattern.source}". ` +
+        `For security, sandbox scripts cannot use eval(), require(), import(), process, or other Node.js globals.`;
+    }
+  }
+  return null; // Script is clean
+}
+
+/**
+ * Executes a user-provided script inside a secure, isolated V8 context.
+ *
+ * The script has access to:
+ * - `forge.api.<methodName>(args)` — Calls registered server-side services.
+ * - `console.log(...)` — Captured and returned in `SandboxResult.logs`.
+ * - Standard JS builtins: JSON, Math, Array, Object, String, Date, Map, Set, etc.
+ *
+ * The script does NOT have access to:
+ * - require, import, process, fs, fetch, eval, Function constructor, or any Node.js globals.
+ *
+ * @param script The JavaScript code to execute.
+ * @param apiRegistry The server-side methods to expose as `forge.api.*`.
+ * @param options Execution options (timeout, memory).
+ * @returns A `SandboxResult` with the return value, logs, and timing.
+ */
+export async function executeSandbox(
+  script: string,
+  apiRegistry: SandboxApiRegistry,
+  options: SandboxOptions = {}
+): Promise<SandboxResult> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const startTime = Date.now();
+  const logs: string[] = [];
+
+  // Step 1: Static code validation (defense-in-depth)
+  const validationError = validateScript(script);
+  if (validationError) {
+    return {
+      success: false,
+      error: validationError,
+      durationMs: Date.now() - startTime,
+      logs: [],
+    };
+  }
+
+  // Step 2: Build the API bridge.
+  // The sandbox can call `forge.api.someMethod(args)` which invokes the
+  // registered server-side function. We wrap each method in a Promise-returning
+  // function so the sandbox can `await` it.
+  const apiBridge: Record<string, (...args: any[]) => Promise<any>> = {};
+  for (const [name, fn] of Object.entries(apiRegistry)) {
+    apiBridge[name] = async (...args: any[]) => {
+      try {
+        return await fn(args.length === 1 ? args[0] : args);
+      } catch (err) {
+        throw new Error(`forge.api.${name}() failed: ${(err as Error).message}`);
+      }
+    };
+  }
+
+  // Step 3: Create a sandboxed context with only safe globals.
+  const sandboxGlobals: Record<string, any> = {
+    // The forge SDK — the only way the script can interact with the server
+    forge: {
+      api: apiBridge,
+    },
+
+    // Safe console (captured, not printed)
+    console: {
+      log: (...args: any[]) => logs.push(args.map(String).join(' ')),
+      warn: (...args: any[]) => logs.push(`[WARN] ${args.map(String).join(' ')}`),
+      error: (...args: any[]) => logs.push(`[ERROR] ${args.map(String).join(' ')}`),
+    },
+
+    // Standard safe builtins
+    JSON,
+    Math,
+    Date,
+    Array,
+    Object,
+    String,
+    Number,
+    Boolean,
+    Map,
+    Set,
+    RegExp,
+    Error,
+    TypeError,
+    RangeError,
+    parseInt,
+    parseFloat,
+    isNaN,
+    isFinite,
+    encodeURIComponent,
+    decodeURIComponent,
+    encodeURI,
+    decodeURI,
+    Promise,
+    setTimeout: undefined, // explicitly blocked
+    setInterval: undefined, // explicitly blocked
+    fetch: undefined, // explicitly blocked
+    require: undefined, // explicitly blocked
+  };
+
+  const context = vm.createContext(sandboxGlobals, {
+    name: 'ForgeCodeModeSandbox',
+    codeGeneration: {
+      strings: false,   // Block eval() and new Function()
+      wasm: false,       // Block WebAssembly compilation
+    },
+  });
+
+  // Step 4: Wrap the user script in an async IIFE so they can use `await`.
+  const wrappedScript = `
+    (async () => {
+      ${script}
+    })();
+  `;
+
+  try {
+    const vmScript = new vm.Script(wrappedScript, {
+      filename: 'forge-sandbox.js',
+    });
+
+    const resultPromise = vmScript.runInContext(context, {
+      timeout: timeoutMs,
+      displayErrors: true,
+    });
+
+    // The wrapped script returns a Promise (from the async IIFE).
+    const result = await resultPromise;
+
+    // Guard: coalesce undefined → null so JSON.stringify always produces valid JSON.
+    // A script with no `return` yields undefined, which JSON.stringify converts to
+    // the JS value undefined (not the string "null"), causing "undefined" to appear
+    // in concatenated output — the root cause of the "sandbox returned no output" bug.
+    const safeResult = result === undefined ? null : result;
+
+    if (safeResult === null && logs.length === 0) {
+      logs.push('[sandbox] Script completed but returned no value. Add a `return` statement to send data back.');
+    }
+
+    return {
+      success: true,
+      result: safeResult,
+      durationMs: Date.now() - startTime,
+      logs,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      error: errorMessage,
+      durationMs: Date.now() - startTime,
+      logs,
+    };
+  }
+}

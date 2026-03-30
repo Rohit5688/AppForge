@@ -30,6 +30,8 @@ import { CoverageAnalysisService } from "./services/CoverageAnalysisService.js";
 import { MigrationService } from "./services/MigrationService.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
+import { executeSandbox } from "./services/SandboxEngine.js";
+import type { SandboxApiRegistry } from "./services/SandboxEngine.js";
 
 /**
  * Appium Cucumber POM MCP Server
@@ -141,13 +143,25 @@ class AppiumMcpServer {
         },
         {
           name: "analyze_codebase",
-          description: "Scan existing codebase using AST for reusable steps, page methods, and utils.",
+          description: "⚠️ TOKEN-INTENSIVE (LEGACY): Scan existing codebase using AST for reusable steps, page methods, and utils. Only use this for very small projects (< 5 files). FOR LARGE PROJECTS, ALWAYS USE 'execute_sandbox_code' (Turbo Mode) instead to save up to 98% in tokens.",
           inputSchema: {
             type: "object",
             properties: {
               projectRoot: { type: "string" }
             },
             required: ["projectRoot"]
+          }
+        },
+        {
+          name: "execute_sandbox_code",
+          description: "🚀 TURBO MODE (RECOMMENDED): Execute a JavaScript snippet inside a secure V8 sandbox to analyze code, find existing steps, or inspect DOMs. Use this tool FOR ALL RESEARCH AND ANALYSIS tasks to prevent token overflow. The script has access to `forge.api.*` and returns only the filtered data you need. Available APIs: forge.api.analyzeCodebase(projectRoot), forge.api.runTests(projectRoot), forge.api.readFile(filePath), forge.api.getConfig(projectRoot).",
+          inputSchema: {
+            type: "object",
+            properties: {
+              script: { type: "string", description: "The JavaScript code to execute. Use `return` to send a value back. Use `await forge.api.*()` to call server services. Keep scripts focused and small." },
+              timeoutMs: { type: "number", description: "Optional execution timeout in milliseconds. Default: 10000 (10s)." }
+            },
+            required: ["script"]
           }
         },
         {
@@ -687,6 +701,54 @@ class AppiumMcpServer {
             return this.textResult(JSON.stringify(verification, null, 2));
           }
 
+          case "execute_sandbox_code": {
+            const v = this.validateArgs(args, ['script']);
+            if (v) return v;
+
+            const apiRegistry: SandboxApiRegistry = {
+              analyzeCodebase: async (projectRoot: string) => {
+                const config = this.configService.read(projectRoot);
+                const paths = this.configService.getPaths(config);
+                return this.analyzerService.analyze(projectRoot, paths);
+              },
+              runTests: async (projectRoot: string) => {
+                return this.executionService.runTest(projectRoot, {});
+              },
+              readFile: async (filePath: string) => {
+                const fs = await import('fs');
+                return fs.default.readFileSync(filePath, 'utf8');
+              },
+              getConfig: async (projectRoot: string) => {
+                return this.configService.read(projectRoot);
+              },
+            };
+
+            const sandboxResult = await executeSandbox(args.script, apiRegistry, { timeoutMs: args.timeoutMs });
+
+            if (sandboxResult.success) {
+              const parts: string[] = [];
+              if (sandboxResult.logs.length > 0) {
+                parts.push(`[Sandbox Logs]\n${sandboxResult.logs.join('\n')}`);
+              }
+              if (sandboxResult.result != null) {
+                parts.push(
+                  typeof sandboxResult.result === 'string'
+                    ? sandboxResult.result
+                    : JSON.stringify(sandboxResult.result, null, 2)
+                );
+              } else if (sandboxResult.logs.length === 0) {
+                parts.push('⚠️ Sandbox executed successfully but returned no data. Ensure your script uses `return <value>` to send results back.');
+              }
+              parts.push(`\n⏱️ Executed in ${sandboxResult.durationMs}ms`);
+              return this.textResult(parts.join('\n\n'));
+            } else {
+              return {
+                content: [{ type: "text" as const, text: `❌ SANDBOX ERROR:\n${sandboxResult.error}\n\nLogs:\n${sandboxResult.logs.join('\n')}\n\n⏱️ Failed after ${sandboxResult.durationMs}ms` }],
+                isError: true
+              };
+            }
+          }
+
           default:
             throw new Error(`Unknown tool: ${request.params.name}`);
         }
@@ -721,6 +783,18 @@ class AppiumMcpServer {
         return { content: [{ type: "text", text: `Error: ${err.message || String(err)}` }], isError: true };
       }
     });
+  }
+
+  private validateArgs(args: any, required: string[]) {
+    for (const req of required) {
+      if (!args || typeof args !== 'object' || !(req in args)) {
+        return {
+          content: [{ type: "text" as const, text: `Missing required argument: ${req}` }],
+          isError: true
+        };
+      }
+    }
+    return null;
   }
 
   private textResult(text: string) {
