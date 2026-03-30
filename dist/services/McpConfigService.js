@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
-import { Questioner } from '../utils/Questioner.js';
 /** Returns safe default paths merged with config paths. */
 function resolvePaths(config) {
     return {
@@ -33,10 +32,7 @@ export class McpConfigService {
             return raw;
         }
         catch (error) {
-            if (error instanceof SyntaxError) {
-                Questioner.clarify("Config appears corrupt. Reset to defaults or view the file?", "mcp-config.json failed to parse as valid JSON. It may have a trailing comma or missing brace.", ["Reset to defaults", "View file to fix manually"]);
-            }
-            throw new AppForgeError(ErrorCode.E005_CONFIG_CORRUPT, `Failed to parse mcp-config.json: ${error.message}`, ["Fix the JSON syntax error in mcp-config.json"]);
+            throw new AppForgeError(ErrorCode.E005_CONFIG_CORRUPT, `Failed to parse mcp-config.json: ${error.message}. Fix the JSON syntax error (trailing comma, missing brace, etc.) and retry.`, ["Fix the JSON syntax error in mcp-config.json", "Run: npx jsonlint mcp-config.json"]);
         }
     }
     /**
