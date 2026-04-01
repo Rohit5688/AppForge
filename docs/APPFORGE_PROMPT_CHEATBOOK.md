@@ -456,7 +456,9 @@ Deliver:
 Migrate the following Espresso test to Appium Cucumber:
 
 Source Framework: espresso
-Test File: 
+Test File:
+```
+
 ```java
 @Test
 public void loginSuccess() {
@@ -467,6 +469,7 @@ public void loginSuccess() {
 }
 ```
 
+```
 Migration Requirements:
 - Target Platform: android
 - Use existing Page Objects if applicable (analyze first)
