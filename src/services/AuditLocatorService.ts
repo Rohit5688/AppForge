@@ -50,8 +50,20 @@ export class AuditLocatorService {
           while ((match = yamlPattern.exec(content)) !== null) {
             const key = match[1];
             const val = match[3];
-            // Only add if it looks like a realistic selector
-            if (val.startsWith('~') || val.startsWith('//') || val.startsWith('/') || val.includes(':id/')) {
+            // ISSUE #18 FIX: Expanded selector detection to include all 5 types:
+            // 1. ~ (accessibility-id)
+            // 2. // or / (xpath)
+            // 3. :id/ (resource-id Android format)
+            // 4. id= (WebdriverIO id selector prefix)
+            // 5. . or # (CSS class/ID selectors)
+            // Previously only detected types 1-3, missing id= and CSS selectors
+            if (val.startsWith('~') || 
+                val.startsWith('//') || 
+                val.startsWith('/') || 
+                val.includes(':id/') ||
+                val.startsWith('id=') ||
+                val.startsWith('.') ||
+                val.startsWith('#')) {
               entries.push(this.classifyEntry(relPath, className, key, val));
             }
           }
@@ -145,6 +157,11 @@ export class AuditLocatorService {
       strategy = 'xpath';
       severity = 'critical';
       recommendation = '🔴 BRITTLE — XPath will break on UI changes. Add testID/accessibility-id to the app source.';
+    } else if (selector.startsWith('id=')) {
+      // ISSUE #18 FIX: Properly classify id= prefix selectors
+      strategy = 'resource-id';
+      severity = 'warning';
+      recommendation = '🟡 Acceptable — id= selector is stable but prefer accessibility-id for cross-platform.';
     } else if (selector.includes(':id/')) {
       strategy = 'resource-id';
       severity = 'warning';

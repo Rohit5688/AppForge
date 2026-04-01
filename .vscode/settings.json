@@ -1,0 +1,4 @@
+{
+    "playwrightBdd.featureFolder": "examples/sample-appium-project/src/features",
+    "playwrightBdd.stepsFolder": "dist/services"
+}

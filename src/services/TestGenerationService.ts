@@ -59,8 +59,10 @@ export class TestGenerationService {
       : '{ "path": "pages/ExamplePage.ts", "content": "..." }';
 
     return `
-You are an expert Mobile Automation Engineer (Appium + WebdriverIO + Cucumber BDD).
-Generate a COMPLETE test suite from this plain English request:
+You are an expert Mobile Automation Engineer specializing in **Appium + WebdriverIO + @cucumber/cucumber** BDD testing.
+Generate a COMPLETE Appium/WebdriverIO Cucumber POM test suite from this plain English request:
+
+⚠️ **CRITICAL CONSTRAINT**: This project uses **ONLY WebdriverIO** with \`driver.$()\` selectors and **Appium** locator strategies. Use \`@wdio/globals\`, \`import { $ }\`, and Appium strategies (accessibility-id, resource-id, xpath). Do NOT import web testing libraries, page objects, or fixtures from other frameworks.
 
 "${testDescription}"
 ${testName ? `Test Name: "${testName}"` : ''}
@@ -187,9 +189,9 @@ This project uses BOTH Page Object classes AND YAML locator files. Follow the EX
 `;
     }
 
-    // Default: POM architecture
+    // Default: POM architecture (ISSUE #11 FIX: Removed Playwright references)
     const envStrategyRule = analysis.envConfig?.present
-      ? "Assume the project uses a `.env` file (e.g., `process.env.APP_URL`). Use Playwright's config or `dotenv` rather than hardcoding."
+      ? "Assume the project uses a `.env` file (e.g., `process.env.APP_URL`). Use WebdriverIO's config loading or `dotenv` rather than hardcoding."
       : "Assume the project manages configuration dynamically (e.g., via a `config/` directory or custom module). Infer the config import from context and use IT rather than hardcoding.";
 
     const dotenvImportRule = analysis.envConfig?.present

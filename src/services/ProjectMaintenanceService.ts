@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UtilAuditService } from './UtilAuditService.js';
 import { Questioner } from '../utils/Questioner.js';
+import { validateProjectRoot } from '../utils/SecurityUtils.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 import { ProjectSetupService } from './ProjectSetupService.js';
 
@@ -15,9 +16,18 @@ export class ProjectMaintenanceService {
 
   /**
    * Idempotent tool to upgrade project dependencies and structural aspects.
+   * 
+   * CB-1 FIX: Validates projectRoot to prevent shell injection attacks
    */
   public async upgradeProject(projectRoot: string): Promise<string> {
     const logs: string[] = [];
+
+    // CB-1 FIX: Validate projectRoot before any operations
+    try {
+      validateProjectRoot(projectRoot);
+    } catch (error: any) {
+      throw new Error(`Invalid projectRoot: ${error.message}`);
+    }
 
     // 1. Auto-detect project structure
     if (!fs.existsSync(path.join(projectRoot, 'package.json'))) {
@@ -27,10 +37,17 @@ export class ProjectMaintenanceService {
     // 2. Upgrade dependencies
     try {
       logs.push("Updating core dependencies...");
-      await execAsync(
-        'npm install webdriverio@latest @cucumber/cucumber@latest @wdio/cli@latest @wdio/local-runner@latest @wdio/cucumber-framework@latest @wdio/appium-service@latest @wdio/spec-reporter@latest',
-        { cwd: projectRoot }
-      );
+      // CB-1 FIX: Use execFile with args array instead of shell command string
+      await execFileAsync('npm', [
+        'install',
+        'webdriverio@latest',
+        '@cucumber/cucumber@latest',
+        '@wdio/cli@latest',
+        '@wdio/local-runner@latest',
+        '@wdio/cucumber-framework@latest',
+        '@wdio/appium-service@latest',
+        '@wdio/spec-reporter@latest'
+      ], { cwd: projectRoot });
       logs.push("✅ Core dependencies updated to latest.");
     } catch (error: any) {
       logs.push(`❌ Failed to update dependencies: ${error.message}`);
@@ -96,8 +113,17 @@ export class ProjectMaintenanceService {
 
   /**
    * Safe to run at any time — only generates files that are missing and never overwrites existing ones.
+   * 
+   * CB-1 FIX: Validates projectRoot to prevent shell injection attacks
    */
   public async repairProject(projectRoot: string, platform: 'android' | 'ios' | 'both' = 'android'): Promise<string> {
+    // CB-1 FIX: Validate projectRoot before any operations
+    try {
+      validateProjectRoot(projectRoot);
+    } catch (error: any) {
+      throw new Error(`Invalid projectRoot: ${error.message}`);
+    }
+
     try {
       await this.projectSetupService.setup(projectRoot, platform, 'RepairedApp');
       return "✅ Project repair completed. Missing baseline files were regenerated.";

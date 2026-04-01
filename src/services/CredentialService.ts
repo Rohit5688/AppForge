@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { McpConfigService } from './McpConfigService.js';
 
 export interface TestUser {
   username: string;
@@ -12,6 +13,7 @@ export interface TestUser {
  * Service to manage cloud credentials, environment variables, and multi-env test users.
  */
 export class CredentialService {
+  private mcpConfigService = new McpConfigService();
   /**
    * Updates the .env file with provided key-value pairs.
    */
@@ -42,6 +44,9 @@ export class CredentialService {
   /**
    * Manage multi-environment user credentials (users.{env}.json).
    * Supports creating, reading, and updating user sets for different environments.
+   * 
+   * The directory path is resolved from mcp-config.json's paths.testDataRoot,
+   * falling back to 'src/test-data' if not configured.
    */
   public async manageUsers(
     projectRoot: string,
@@ -49,7 +54,20 @@ export class CredentialService {
     env: string = 'staging',
     users?: TestUser[]
   ): Promise<string> {
-    const usersDir = path.join(projectRoot, 'test-data');
+    // Resolve the test data directory from config with fallback
+    let testDataDir = 'src/test-data'; // Default fallback
+    try {
+      const config = this.mcpConfigService.read(projectRoot);
+      // Check for testDataRoot in paths config
+      if (config.paths && 'testDataRoot' in config.paths) {
+        testDataDir = (config.paths as any).testDataRoot;
+      }
+    } catch (error) {
+      // Config doesn't exist or can't be read, use fallback
+      // This is not an error - projects may not have config yet
+    }
+
+    const usersDir = path.join(projectRoot, testDataDir);
     const usersFile = path.join(usersDir, `users.${env}.json`);
 
     if (operation === 'read') {
@@ -80,6 +98,22 @@ export class CredentialService {
    * Generates a typed getUser() helper for test code to import.
    */
   private async generateUserHelper(projectRoot: string, env: string): Promise<void> {
+    // Resolve the test data directory from config with fallback
+    let testDataDir = 'src/test-data'; // Default fallback
+    try {
+      const config = this.mcpConfigService.read(projectRoot);
+      if (config.paths && 'testDataRoot' in config.paths) {
+        testDataDir = (config.paths as any).testDataRoot;
+      }
+    } catch (error) {
+      // Use fallback
+    }
+
+    // Calculate the relative path from utils directory to test-data directory
+    const utilsDirPath = path.join(projectRoot, 'utils');
+    const testDataPath = path.join(projectRoot, testDataDir);
+    const relativePath = path.relative(utilsDirPath, testDataPath).replace(/\\/g, '/');
+
     const content = `import * as fs from 'fs';
 import * as path from 'path';
 
@@ -96,7 +130,7 @@ export interface TestUser {
  * @param role - Optional role filter (admin, user, etc.)
  */
 export function getUser(env: string = '${env}', role?: string): TestUser {
-  const filePath = path.join(__dirname, '..', 'test-data', \`users.\${env}.json\`);
+  const filePath = path.join(__dirname, '${relativePath}', \`users.\${env}.json\`);
   const users: TestUser[] = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
   if (role) {
@@ -111,6 +145,15 @@ export function getUser(env: string = '${env}', role?: string): TestUser {
 `;
 
     const helperPath = path.join(projectRoot, 'utils', 'getUser.ts');
+    
+    // Ensure utils directory exists
+    const utilsDir = path.join(projectRoot, 'utils');
+    try {
+      await fs.mkdir(utilsDir, { recursive: true });
+    } catch {
+      // Dir exists
+    }
+    
     await fs.writeFile(helperPath, content, 'utf8');
   }
 }

@@ -18,7 +18,10 @@ The `mcp-config.json` file dictates project-level rules for test generation, exe
 | `paths.pagesRoot` | `string` | Location of Page Objects (default: `"pages"`). |
 | `paths.stepsRoot` | `string` | Location of Step Definitions (default: `"step-definitions"`). |
 | `paths.utilsRoot` | `string` | Location of helper utilities (default: `"utils"`). |
+| `paths.testDataRoot` | `string` | Location of test data files (default: `"src/test-data"`). |
 | `reuse.locatorOrder` | `string[]` | Priority list for selector generation (e.g., `["accessibility id", "resource-id", "xpath"]`). |
+| `execution.timeoutMs` | `number` | Default timeout for test execution in milliseconds (default: `1800000` = 30 min). |
+| `project.executionCommand` | `string` | Command to execute tests (e.g., `"npx wdio run wdio.conf.ts"`). |
 
 ---
 
@@ -75,3 +78,67 @@ Use the `reuse.locatorOrder` array to tell the AI what you prefer. If your app h
 ```
 
 This ensures the `generate_cucumber_pom` and `self_heal_test` tools always try to give you the most stable selector first!
+
+---
+
+## ⏱️ Test Execution Timeout
+
+The `execution.timeoutMs` field controls how long tests are allowed to run before being terminated. This is especially important for long-running test suites or CI environments.
+
+```json
+"execution": {
+  "timeoutMs": 3600000
+}
+```
+
+### Timeout Resolution Priority
+
+When `run_cucumber_test` executes, it resolves the timeout in this order:
+
+1. **Explicit parameter** - `timeoutMs` passed directly to the tool call (highest priority)
+2. **mcp-config.json** - The `execution.timeoutMs` value
+3. **Auto-detected** - Parsed from `playwright.config.ts` or `playwright.config.js` (if present)
+4. **Default** - 30 minutes (1800000ms) if nothing else is configured
+
+### Example Configurations
+
+**Short smoke tests (5 minutes):**
+```json
+"execution": {
+  "timeoutMs": 300000
+}
+```
+
+**Full regression suite (2 hours):**
+```json
+"execution": {
+  "timeoutMs": 7200000
+}
+```
+
+> [!WARNING]
+> **Maximum Timeout**: The system enforces a 2-hour (7200000ms) cap for safety. Requests exceeding this will be automatically capped with a warning.
+
+### Direct Tool Usage
+
+You can also override the timeout when calling `run_cucumber_test` directly:
+
+```javascript
+// AI Host call example:
+use_mcp_tool({
+  server_name: "appForge",
+  tool_name: "run_cucumber_test",
+  arguments: {
+    projectRoot: "/path/to/project",
+    timeoutMs: 600000,  // 10 minutes for this specific run
+    tags: "@smoke"
+  }
+})
+```
+
+The tool output will always show which timeout was used:
+```
+[Timeout: 600000ms (source: explicit)]
+
+Test execution output...
+```

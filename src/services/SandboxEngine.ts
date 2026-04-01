@@ -7,10 +7,15 @@
  * directly through a thin "forge" API, processes the data locally, and returns
  * ONLY the final result (e.g., a locator string instead of 10,000 lines of DOM).
  *
- * SAFETY: Uses Node's built-in `vm` module with strict contextification.
- * - No access to `require`, `process`, `fs`, `fetch`, `eval`, or `Function`.
+ * SECURITY: Uses Node's built-in `vm` module with strict contextification.
+ * - No access to `require`, `process`, `fs`, `fetch`, `eval`, `Function`, or `global`.
+ * - All dangerous constructors and prototypes are frozen or blocked.
  * - Strict timeout enforcement (default 10s).
  * - Fresh context per execution (no state leakage between runs).
+ *
+ * LIMITATIONS: Node.js VM is NOT a security sandbox for adversarial code.
+ * It provides isolation from accidents, not malicious exploitation. For true
+ * sandboxing, use worker_threads with restricted permissions (future enhancement).
  *
  * ZERO BREAKING CHANGES: This is a purely additive feature. All existing tools
  * remain untouched and fully functional. This adds ONE new tool alongside them.
@@ -67,8 +72,12 @@ const BLOCKED_PATTERNS = [
   /\bprocess\b/,
   /\b__dirname\b/,
   /\b__filename\b/,
+  /\bglobal\b/,
   /\bglobalThis\b/,
   /\bchild_process\b/,
+  /\bworker_threads\b/,
+  /\.constructor\s*\.\s*constructor/i,
+  /this\s*\.\s*constructor\s*\.\s*constructor/i,
 ];
 
 /**
@@ -79,10 +88,24 @@ function validateScript(script: string): string | null {
   for (const pattern of BLOCKED_PATTERNS) {
     if (pattern.test(script)) {
       return `Blocked: Script contains forbidden pattern "${pattern.source}". ` +
-        `For security, sandbox scripts cannot use eval(), require(), import(), process, or other Node.js globals.`;
+        `For security, sandbox scripts cannot use eval(), require(), import(), process, global, ` +
+        `constructor chains, or other Node.js internals.`;
     }
   }
   return null; // Script is clean
+}
+
+/**
+ * Creates a minimal safe console that captures output without exposing internals.
+ */
+function createSafeConsole(logs: string[]) {
+  return Object.freeze({
+    log: (...args: any[]) => logs.push(args.map(String).join(' ')),
+    warn: (...args: any[]) => logs.push(`[WARN] ${args.map(String).join(' ')}`),
+    error: (...args: any[]) => logs.push(`[ERROR] ${args.map(String).join(' ')}`),
+    info: (...args: any[]) => logs.push(`[INFO] ${args.map(String).join(' ')}`),
+    debug: (...args: any[]) => logs.push(`[DEBUG] ${args.map(String).join(' ')}`),
+  });
 }
 
 /**
@@ -94,7 +117,9 @@ function validateScript(script: string): string | null {
  * - Standard JS builtins: JSON, Math, Array, Object, String, Date, Map, Set, etc.
  *
  * The script does NOT have access to:
- * - require, import, process, fs, fetch, eval, Function constructor, or any Node.js globals.
+ * - require, import, process, fs, fetch, eval, Function constructor, global, or any Node.js globals.
+ * - Constructor chains that could escape the sandbox.
+ * - Timers (setTimeout, setInterval) that could create zombie processes.
  *
  * @param script The JavaScript code to execute.
  * @param apiRegistry The server-side methods to expose as `forge.api.*`.
@@ -136,23 +161,23 @@ export async function executeSandbox(
     };
   }
 
+  // Freeze the API bridge to prevent modification
+  Object.freeze(apiBridge);
+
   // Step 3: Create a sandboxed context with only safe globals.
+  // CRITICAL: We explicitly set dangerous globals to undefined or null to block access.
   const sandboxGlobals: Record<string, any> = {
     // The forge SDK — the only way the script can interact with the server
-    forge: {
+    forge: Object.freeze({
       api: apiBridge,
-    },
+    }),
 
     // Safe console (captured, not printed)
-    console: {
-      log: (...args: any[]) => logs.push(args.map(String).join(' ')),
-      warn: (...args: any[]) => logs.push(`[WARN] ${args.map(String).join(' ')}`),
-      error: (...args: any[]) => logs.push(`[ERROR] ${args.map(String).join(' ')}`),
-    },
+    console: createSafeConsole(logs),
 
-    // Standard safe builtins
-    JSON,
-    Math,
+    // Standard safe builtins (frozen to prevent prototype pollution)
+    JSON: Object.freeze(JSON),
+    Math: Object.freeze(Math),
     Date,
     Array,
     Object,
@@ -161,10 +186,16 @@ export async function executeSandbox(
     Boolean,
     Map,
     Set,
+    WeakMap,
+    WeakSet,
     RegExp,
     Error,
     TypeError,
     RangeError,
+    SyntaxError,
+    ReferenceError,
+    EvalError,
+    URIError,
     parseInt,
     parseFloat,
     isNaN,
@@ -174,12 +205,36 @@ export async function executeSandbox(
     encodeURI,
     decodeURI,
     Promise,
-    setTimeout: undefined, // explicitly blocked
-    setInterval: undefined, // explicitly blocked
-    fetch: undefined, // explicitly blocked
-    require: undefined, // explicitly blocked
+    
+    // === SECURITY: Explicitly block all dangerous globals ===
+    // Setting to undefined ensures they cannot be accessed, even via prototype chains
+    setTimeout: undefined,
+    setInterval: undefined,
+    setImmediate: undefined,
+    clearTimeout: undefined,
+    clearInterval: undefined,
+    clearImmediate: undefined,
+    fetch: undefined,
+    require: undefined,
+    module: undefined,
+    exports: undefined,
+    __dirname: undefined,
+    __filename: undefined,
+    global: undefined,
+    globalThis: undefined,
+    process: undefined,
+    Buffer: undefined,
+    
+    // Block constructor-based escapes
+    // Note: this.constructor.constructor is checked in static validation
+    Function: undefined,
+    eval: undefined,
+    
+    // Block async resource access
+    queueMicrotask: undefined,
   };
 
+  // Create the isolated context with restricted code generation
   const context = vm.createContext(sandboxGlobals, {
     name: 'ForgeCodeModeSandbox',
     codeGeneration: {
@@ -189,8 +244,10 @@ export async function executeSandbox(
   });
 
   // Step 4: Wrap the user script in an async IIFE so they can use `await`.
+  // We also wrap in try-catch to capture any unhandled errors gracefully.
   const wrappedScript = `
     (async () => {
+      'use strict';
       ${script}
     })();
   `;

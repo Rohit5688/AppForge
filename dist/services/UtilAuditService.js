@@ -18,9 +18,31 @@ export class UtilAuditService {
     analyzerService = new CodebaseAnalyzerService();
     configService = new McpConfigService();
     async audit(projectRoot, customWrapperPackage) {
-        const config = this.configService.read(projectRoot);
-        const paths = this.configService.getPaths(config);
-        const analysis = await this.analyzerService.analyze(projectRoot, paths);
+        // ISSUE #20 FIX: Read mcp-config.json to respect configured directories
+        let config;
+        let paths;
+        try {
+            config = this.configService.read(projectRoot);
+            paths = this.configService.getPaths(config);
+        }
+        catch (err) {
+            // If config doesn't exist, use defaults
+            config = null;
+            paths = {
+                featuresRoot: 'src/features',
+                stepsRoot: 'src/step-definitions',
+                pagesRoot: 'src/pages',
+                utilsRoot: 'src/utils',
+                testDataRoot: 'src/test-data'
+            };
+        }
+        // Pass paths to analyzer (which expects stepsRoot, not stepDefinitionsRoot)
+        const analysis = await this.analyzerService.analyze(projectRoot, {
+            featuresRoot: paths.featuresRoot,
+            stepsRoot: paths.stepsRoot,
+            pagesRoot: paths.pagesRoot,
+            utilsRoot: paths.utilsRoot
+        });
         // 1. Collect all project-local util method names
         const projectUtilMethods = new Set();
         // From the codebase analyzer's existingUtils
@@ -30,22 +52,45 @@ export class UtilAuditService {
                 projectUtilMethods.add(namePart.toLowerCase());
             }
         }
-        // Also scan conventional util dirs by convention (including src/ and tests/ nests)
-        const candidateUtilDirs = [
+        // ISSUE #20 FIX: Build scan list from both config and conventional directories
+        const candidateUtilDirs = new Set();
+        // Add configured directories from mcp-config.json
+        if (config) {
+            // Scan the pages directory (may contain helper methods)
+            if (paths.pagesRoot) {
+                candidateUtilDirs.add(path.join(projectRoot, paths.pagesRoot));
+            }
+            // Scan testData directory (often contains utilities)
+            if (paths.testDataRoot) {
+                candidateUtilDirs.add(path.join(projectRoot, paths.testDataRoot));
+            }
+            // Scan parent directory of testData (e.g., if testData is 'src/test-data', scan 'src/')
+            if (paths.testDataRoot) {
+                const parentDir = path.dirname(path.join(projectRoot, paths.testDataRoot));
+                if (parentDir !== projectRoot) {
+                    candidateUtilDirs.add(parentDir);
+                }
+            }
+        }
+        // Add conventional util directories (including src/ and tests/ nests)
+        const conventionalDirs = [
             'utils', 'helpers', 'support', 'lib',
             'src/utils', 'src/helpers', 'src/support', 'src/lib',
             'tests/utils', 'tests/helpers', 'tests/support'
-        ]
-            .map(d => path.join(projectRoot, d))
-            .filter(d => fs.existsSync(d));
-        for (const utilsDir of candidateUtilDirs) {
+        ];
+        for (const dir of conventionalDirs) {
+            candidateUtilDirs.add(path.join(projectRoot, dir));
+        }
+        // Filter to only existing directories
+        const existingDirs = Array.from(candidateUtilDirs).filter(d => fs.existsSync(d));
+        for (const utilsDir of existingDirs) {
             this.scanUtilsDir(utilsDir, projectUtilMethods);
         }
         // 2. Resolve custom wrapper package methods (BUG-12 FIX)
         const wrapperMethods = new Set();
         let wrapperResolved = false;
         let wrapperInstalled = false;
-        const resolvedWrapper = customWrapperPackage || config.customWrapperPackage;
+        const resolvedWrapper = customWrapperPackage || config?.customWrapperPackage;
         if (resolvedWrapper) {
             wrapperResolved = true;
             try {
@@ -60,9 +105,9 @@ export class UtilAuditService {
                 // Wrapper not installed — will surface as a note below
             }
         }
-        // 3. Evaluate each Appium API surface entry
-        const present = [];
-        const coveredByWrapper = [];
+        // 3. Evaluate each Appium API surface entry (ISSUE #20: de-duplication via Set)
+        const presentSet = new Set();
+        const coveredByWrapperSet = new Set();
         const missing = [];
         const actionableSuggestions = [];
         for (const entry of APPIUM_API_SURFACE) {
@@ -70,11 +115,11 @@ export class UtilAuditService {
             const inProject = allNames.some(n => projectUtilMethods.has(n));
             const inWrapper = allNames.some(n => wrapperMethods.has(n));
             if (inProject) {
-                present.push(entry.method);
+                presentSet.add(entry.method);
             }
             else if (inWrapper) {
-                coveredByWrapper.push(entry.method);
-                present.push(entry.method); // counts toward coverage %
+                coveredByWrapperSet.add(entry.method);
+                presentSet.add(entry.method); // counts toward coverage %
             }
             else {
                 missing.push({
@@ -85,6 +130,9 @@ export class UtilAuditService {
                 actionableSuggestions.push(`Add ${entry.suggestedUtilClass}.${entry.method}() to ${entry.suggestedUtilClass}.ts`);
             }
         }
+        // Convert Sets to Arrays for the result
+        const present = Array.from(presentSet);
+        const coveredByWrapper = Array.from(coveredByWrapperSet);
         const total = present.length + missing.length;
         const coveragePercent = Math.round((present.length / (total || 1)) * 100);
         const customWrapperNote = wrapperResolved

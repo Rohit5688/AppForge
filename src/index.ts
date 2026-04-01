@@ -215,7 +215,7 @@ class AppForgeServer {
         },
         {
           name: "run_cucumber_test",
-          description: "RUN TESTS. Use when the user says 'run my tests / execute / run @smoke'. Executes the Appium Cucumber suite. Auto-detects execution command from mcp-config.json — falls back to npx wdio run wdio.conf.ts if not configured. Supports Cucumber tag expressions and platform filtering. Returns: { success, output, stats: { total, passed, failed, skipped }, reportPath }. If tests fail, pass the output to self_heal_test to fix broken locators.",
+          description: "RUN TESTS. Use when the user says 'run my tests / execute / run @smoke'. Executes the Appium Cucumber suite. Auto-detects execution command from mcp-config.json — falls back to npx wdio run wdio.conf.ts if not configured. Supports Cucumber tag expressions and platform filtering. Timeout resolution: explicit timeoutMs > mcp-config.json execution.timeoutMs > detected from playwright.config > default (30 min). Returns: { success, output, stats: { total, passed, failed, skipped }, reportPath }. If tests fail, pass the output to self_heal_test to fix broken locators.",
           inputSchema: {
             type: "object",
             properties: {
@@ -223,7 +223,8 @@ class AppForgeServer {
               tags: { type: "string", description: "Cucumber tag expression, e.g. '@smoke and @android'" },
               platform: { type: "string", enum: ["android", "ios"] },
               specificArgs: { type: "string" },
-              overrideCommand: { type: "string", description: "Full custom execution command (e.g. 'npm run test'). Bypasses mcp-config.json executionCommand." }
+              overrideCommand: { type: "string", description: "Full custom execution command (e.g. 'npm run test'). Bypasses mcp-config.json executionCommand." },
+              timeoutMs: { type: "number", description: "Optional execution timeout in milliseconds. Overrides all other timeout sources. Maximum: 2 hours (7200000ms)." }
             },
             required: ["projectRoot"]
           }
@@ -268,7 +269,7 @@ class AppForgeServer {
         },
         {
           name: "manage_users",
-          description: "MANAGE TEST USERS. Use when the user wants to add or view test account credentials for different environments (staging, prod). Stores users with roles (admin, readonly, etc.) in test-data/users.{env}.json and generates a typed getUser() helper. Returns: list of users on read, confirmation on write.",
+          description: "MANAGE TEST USERS. Use when the user wants to add or view test account credentials for different environments (staging, prod). Stores users with roles (admin, readonly, etc.) in users.{env}.json following the testDataRoot path from mcp-config.json (defaults to 'src/test-data' if not configured). Generates a typed getUser() helper. Returns: list of users on read, confirmation on write.",
           inputSchema: {
             type: "object",
             properties: {
@@ -575,7 +576,8 @@ class AppForgeServer {
               tags: args.tags,
               platform: args.platform,
               specificArgs: args.specificArgs,
-              overrideCommand: args.overrideCommand
+              overrideCommand: args.overrideCommand,
+              timeoutMs: args.timeoutMs
             });
             const hint = result.success 
               ? "✅ All tests passed. Call summarize_suite to generate the final report."

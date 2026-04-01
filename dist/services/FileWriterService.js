@@ -1,17 +1,47 @@
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { auditGeneratedCode, auditFeatureFile } from '../utils/SecurityUtils.js';
+import { auditGeneratedCode, auditFeatureFile, validateProjectRoot, validateFilePath } from '../utils/SecurityUtils.js';
 import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 export class FileWriterService {
     /**
      * Validates generated TypeScript files using tsc --noEmit, then writes if valid.
      * Retries up to maxRetries times, returning error details for LLM to self-heal.
+     *
+     * CB-1 FIX: Validates projectRoot to prevent shell injection attacks
+     * CB-2 FIX: Validates all file paths to prevent directory traversal attacks
      */
     async validateAndWrite(projectRoot, files, maxRetries = 3, dryRun = false) {
+        // CB-1 FIX: Validate projectRoot before any operations
+        try {
+            validateProjectRoot(projectRoot);
+        }
+        catch (error) {
+            return JSON.stringify({
+                success: false,
+                phase: 'security-validation',
+                error: error.message,
+                message: 'Invalid projectRoot: security validation failed.'
+            }, null, 2);
+        }
+        // CB-2 FIX: Validate all file paths to prevent directory traversal
+        for (const file of files) {
+            try {
+                validateFilePath(projectRoot, file.path);
+            }
+            catch (error) {
+                return JSON.stringify({
+                    success: false,
+                    phase: 'security-validation',
+                    error: error.message,
+                    file: file.path,
+                    message: 'Invalid file path: directory traversal detected.'
+                }, null, 2);
+            }
+        }
         // Step 1: Write files to a temp staging area first
         const stagingDir = path.join(projectRoot, '.mcp-staging');
         if (!fs.existsSync(stagingDir)) {
@@ -213,11 +243,26 @@ export class FileWriterService {
                 };
                 fs.writeFileSync(stagingTsconfigPath, JSON.stringify(stagingTsconfig, null, 2), 'utf8');
             }
-            const filePaths = tsFiles.map(f => path.join(stagingDir, f.path)).join(' ');
-            const cmd = hasTsConfig
-                ? `npx tsc --noEmit --project "${stagingTsconfigPath}"`
-                : `npx tsc --noEmit --strict --esModuleInterop --skipLibCheck ${filePaths}`;
-            await execAsync(cmd, { cwd: projectRoot });
+            // CB-1 FIX: Use execFile with args array instead of shell command string
+            // to prevent shell injection via projectRoot parameter
+            if (hasTsConfig) {
+                await execFileAsync('npx', ['tsc', '--noEmit', '--project', stagingTsconfigPath], {
+                    cwd: projectRoot
+                });
+            }
+            else {
+                const filePaths = tsFiles.map(f => path.join(stagingDir, f.path));
+                await execFileAsync('npx', [
+                    'tsc',
+                    '--noEmit',
+                    '--strict',
+                    '--esModuleInterop',
+                    '--skipLibCheck',
+                    ...filePaths
+                ], {
+                    cwd: projectRoot
+                });
+            }
             return { valid: true, errors: [] };
         }
         catch (error) {
