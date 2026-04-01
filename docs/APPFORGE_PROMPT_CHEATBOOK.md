@@ -15,7 +15,8 @@
 7. [Configuration Management](#7-configuration-management)
 8. [CI/CD & DevOps](#8-cicd--devops)
 9. [Advanced Scenarios](#9-advanced-scenarios)
-10. [Troubleshooting](#10-troubleshooting)
+10. [Training the AI Assistant](#10-training-the-ai-assistant)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -758,7 +759,261 @@ Generate:
 
 ---
 
-## 10. 🔧 Troubleshooting
+## 10. 🧠 Training the AI Assistant
+
+AppForge includes a **Learning Service** that allows the AI to learn from successful test healings and build a knowledge base. This "AI memory" helps prevent recurring issues and improves automation quality over time.
+
+### 10.1 Understanding the Learning System
+
+The AI learns automatically when:
+- Tests are successfully healed using the `self_heal_test` tool
+- You explicitly teach patterns using prompts
+- Failed locators are corrected and verified
+
+**Knowledge is stored in**: `.mcp-knowledge.json` in your project root
+
+---
+
+### 10.2 Teaching the AI a Pattern
+```
+Teach the AI this pattern to remember for future test generation:
+
+Pattern: [DESCRIBE_THE_PATTERN]
+Context: [WHEN_TO_APPLY]
+Solution: [WHAT_TO_DO]
+Tags: [RELEVANT_TAGS for easier retrieval, e.g., locators, android, ios, login]
+
+Example Pattern:
+"When dealing with dynamic IDs in the checkout flow, always prefer accessibility-id over resource-id because the app generates random suffixes like _12345"
+
+Save this to the knowledge base so it's used in future test generation and healing.
+```
+
+**Example:**
+```
+Teach the AI this pattern to remember for future test generation:
+
+Pattern: Payment button locator changes based on payment method
+Context: When generating or healing tests for the payment screen
+Solution: Use the accessibility-id "payment_submit_button" which remains constant across all payment methods (credit card, PayPal, Apple Pay), instead of the text-based selector which changes to "Pay Now", "Pay with PayPal", etc.
+Tags: payment, locators, cross-platform, checkout
+
+Save this to the knowledge base so it's used in future test generation and healing.
+```
+
+---
+
+### 10.3 Reviewing What the AI Has Learned
+```
+Show me the current knowledge base for this project:
+
+Display:
+1. All learned patterns and solutions
+2. When each was learned (timestamp)
+3. How many times each pattern has been referenced
+4. Categories/tags of knowledge
+
+Format: [Markdown table/detailed list/JSON]
+```
+
+---
+
+### 10.4 Teaching App-Specific Conventions
+```
+Teach the AI about our app's specific conventions:
+
+App Conventions:
+- [CONVENTION_1]: [DESCRIPTION]
+- [CONVENTION_2]: [DESCRIPTION]
+[...]
+
+Examples:
+- All buttons use accessibility-id with suffix "_btn"
+- Android uses "com.myapp:id/" prefix for all resource IDs
+- iOS screens use "Screen_" prefix for accessibility identifiers
+- Input fields follow pattern: "[field_name]_input"
+- Error messages appear in element with id "error_banner"
+
+Store these conventions for consistent test generation.
+```
+
+**Example:**
+```
+Teach the AI about our app's specific conventions:
+
+App Conventions:
+- All primary action buttons use accessibility-id ending with "_primary_btn"
+- Secondary buttons end with "_secondary_btn"
+- Input fields use pattern "[screen_name]_[field_purpose]_input"
+- All modals/dialogs have accessibility-id starting with "modal_"
+- Success messages: id="success_toast", error messages: id="error_toast"
+- Loading indicators always use accessibility-id "loading_spinner"
+- Navigation bar items use format "nav_[destination]"
+
+Store these conventions for consistent test generation.
+```
+
+---
+
+### 10.5 Training on Screen Navigation Patterns
+```
+Teach the AI the navigation flow for [FEATURE_NAME]:
+
+Navigation Steps:
+1. [STEP_1]: [SCREEN_TO_SCREEN with actions]
+2. [STEP_2]: [SCREEN_TO_SCREEN with actions]
+[...]
+
+Key Elements for Each Screen:
+- [SCREEN_NAME]:
+  - Primary identifier: [LOCATOR]
+  - Key elements: [LIST_KEY_ELEMENTS]
+  - Navigation actions: [HOW_TO_ENTER/EXIT]
+
+Use this for accurate test generation and healing navigation.
+```
+
+**Example:**
+```
+Teach the AI the navigation flow for Checkout Process:
+
+Navigation Steps:
+1. Cart Screen → Tap "checkout_btn" → Shipping Screen
+2. Shipping Screen → Fill address fields → Tap "continue_to_payment_btn" → Payment Screen  
+3. Payment Screen → Select payment method → Fill card details → Tap "complete_order_btn" → Confirmation Screen
+4. Confirmation Screen → Verify "order_confirmation_message" → Tap "view_order_btn" → Order Details Screen
+
+Key Elements for Each Screen:
+- Cart Screen:
+  - Primary identifier: ~cart_title
+  - Key elements: item_list, subtotal_text, checkout_btn
+  - Navigation: Main tab → Cart icon
+- Shipping Screen:
+  - Primary identifier: ~shipping_address_title
+  - Key elements: address_line1_input, city_input, zip_input, continue_to_payment_btn
+  - Back: shipping_back_btn
+- Payment Screen:
+  - Primary identifier: ~payment_method_title
+  - Key elements: card_number_input, expiry_input, cvv_input, complete_order_btn
+  - Back: payment_back_btn
+
+Use this for accurate test generation and healing navigation.
+```
+
+---
+
+### 10.6 Teaching Error Patterns and Recovery
+```
+Teach the AI common error patterns and recovery strategies:
+
+Error Scenario: [ERROR_DESCRIPTION]
+Symptoms: [HOW_TO_IDENTIFY]
+Root Cause: [WHY_IT_HAPPENS]
+Solution: [HOW_TO_FIX]
+Prevention: [HOW_TO_AVOID]
+
+Tag: [error-handling/recovery/network/etc.]
+```
+
+**Example:**
+```
+Teach the AI common error patterns and recovery strategies:
+
+Error Scenario: Network timeout during payment processing
+Symptoms: 
+- Test hangs on payment screen
+- "payment_loading_spinner" never disappears
+- No error message displayed after 30+ seconds
+Root Cause: App doesn't handle network timeouts gracefully, spinner keeps spinning
+Solution: 
+- Wait for max 30 seconds for spinner
+- Force navigate back and retry
+- Check for error toast with longer timeout
+Prevention: 
+- Add explicit network failure test scenarios
+- Use shorter timeouts in test (20s max)
+- Verify error states are reachable
+
+Tag: network, error-handling, payment, flaky-tests
+```
+
+---
+
+### 10.7 Bulk Training from Documentation
+```
+I have app documentation that describes UI patterns and conventions. Extract and learn from it:
+
+Documentation: [PASTE_DOCUMENTATION or PATH_TO_FILE]
+
+Extract and save:
+- UI element naming conventions
+- Screen flow patterns
+- Common locator strategies
+- Platform-specific differences
+- Error handling approaches
+- Accessibility guidelines
+
+Create a comprehensive knowledge base entry for each pattern found.
+```
+
+---
+
+### 10.8 Forgetting Outdated Patterns
+```
+Remove this outdated pattern from the knowledge base:
+
+Pattern to Remove: [DESCRIPTION or PATTERN_ID]
+Reason: [WHY_IT'S_NO_LONGER_VALID]
+
+Examples of reasons:
+- UI redesign changed element structure
+- App switched frameworks (React Native → Flutter)
+- Locator strategy changed company-wide
+- Screen was removed from app
+```
+
+**Example:**
+```
+Remove this outdated pattern from the knowledge base:
+
+Pattern to Remove: "Use resource-id 'submit_button' for checkout"
+Reason: App UI was redesigned in v3.0. The checkout button now uses accessibility-id 'checkout_submit_btn' and the old resource-id no longer exists.
+```
+
+---
+
+### 10.9 Exporting Knowledge for Team Sharing
+```
+Export the knowledge base to share with the team:
+
+Export Format: [Markdown/JSON/CSV]
+Include:
+- All learned patterns
+- Usage statistics
+- Creation/modification dates
+- Tags and categories
+
+Purpose: [team onboarding/documentation/backup/migration]
+```
+
+---
+
+### 10.10 Importing Team Knowledge
+```
+Import knowledge from another project or team member:
+
+Source: [FILE_PATH or PASTE_JSON]
+Merge Strategy: [replace duplicates/keep both/skip conflicts]
+
+Validate:
+- Check for conflicts with existing patterns
+- Verify patterns are still relevant
+- Update tags if needed
+```
+
+---
+
+## 11. 🔧 Troubleshooting
 
 ### 10.1 Generic Troubleshooting
 ```
