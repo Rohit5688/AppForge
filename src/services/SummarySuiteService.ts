@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { McpConfigService } from './McpConfigService.js';
 
 export interface SuiteSummary {
   totalFeatures: number;
@@ -13,11 +14,98 @@ export interface SuiteSummary {
 }
 
 export class SummarySuiteService {
+  private configService: McpConfigService;
+
+  constructor() {
+    this.configService = new McpConfigService();
+  }
+
+  /**
+   * Auto-detects the report file path from common locations
+   */
+  private async autoDetectReportPath(projectRoot: string, configuredPath?: string): Promise<string | null> {
+    // Priority order for report detection
+    const possiblePaths = [
+      configuredPath, // Highest priority: explicitly configured
+      'reports/cucumber-results.json',
+      'reports/cucumber-report.json',
+      'reports/cucumber.json',
+      'cucumber-report.json',
+      'allure-results/cucumber.json',
+      'test-results/cucumber.json',
+      'wdio-reports/cucumber.json'
+    ].filter(Boolean) as string[];
+
+    for (const relativePath of possiblePaths) {
+      const fullPath = path.join(projectRoot, relativePath);
+      try {
+        await fs.access(fullPath);
+        return relativePath;
+      } catch {
+        // File doesn't exist, try next
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Detects the report format (standard Cucumber JSON or WebdriverIO format)
+   */
+  private detectReportFormat(features: any[]): 'cucumber' | 'wdio' | 'unknown' {
+    if (!Array.isArray(features) || features.length === 0) {
+      return 'unknown';
+    }
+
+    const firstFeature = features[0];
+    const firstElement = firstFeature.elements?.[0];
+
+    // WebdriverIO format typically has 'id' field on both feature and elements
+    if (firstFeature.id && firstElement?.id) {
+      return 'wdio';
+    }
+
+    // Standard Cucumber format has 'type' or 'keyword' fields
+    if (firstElement?.type || firstElement?.keyword) {
+      return 'cucumber';
+    }
+
+    // Default to cucumber if structure looks valid
+    if (firstFeature.elements && Array.isArray(firstFeature.elements)) {
+      return 'cucumber';
+    }
+
+    return 'unknown';
+  }
+
   /**
    * Parses a Cucumber JSON report and generates a plain-English summary.
+   * Supports both standard Cucumber JSON and WebdriverIO Cucumber formats.
+   * Auto-detects report path if not specified.
    */
-  public async summarize(projectRoot: string, reportFile: string = 'reports/cucumber-results.json'): Promise<SuiteSummary> {
-    const reportPath = path.join(projectRoot, reportFile);
+  public async summarize(projectRoot: string, reportFile?: string): Promise<SuiteSummary> {
+    // Try to load config for custom report path
+    let configuredReportPath: string | undefined;
+    try {
+      const config = this.configService.read(projectRoot);
+      configuredReportPath = config.execution?.reportPath || 
+                            path.join(config.paths?.reportsRoot || 'reports', 'cucumber-results.json');
+    } catch {
+      // Config not found or invalid, will use defaults
+    }
+
+    // Auto-detect report path if not explicitly provided
+    let finalReportFile = reportFile;
+    if (!finalReportFile) {
+      const detected = await this.autoDetectReportPath(projectRoot, configuredReportPath);
+      if (detected) {
+        finalReportFile = detected;
+      } else {
+        finalReportFile = configuredReportPath || 'reports/cucumber-results.json';
+      }
+    }
+
+    const reportPath = path.join(projectRoot, finalReportFile);
     let features: any[] = [];
 
     try {
@@ -43,9 +131,26 @@ export class SummarySuiteService {
     let totalDurationNs = 0;
     const failedScenarios: { name: string; error: string }[] = [];
 
+    // Detect format for better parsing
+    const format = this.detectReportFormat(features);
+
     for (const feature of features) {
       for (const element of (feature.elements ?? [])) {
-        const isScenario = element.type?.toLowerCase() === 'scenario' || element.keyword?.toLowerCase().includes('scenario');
+        // For WebdriverIO format, all elements are scenarios (no type/keyword needed)
+        // For standard Cucumber, check type/keyword to filter out hooks/backgrounds
+        let isScenario = true;
+        if (format === 'cucumber') {
+          isScenario = element.type?.toLowerCase() === 'scenario' || 
+                       element.keyword?.toLowerCase().includes('scenario');
+        }
+        // For WebdriverIO, we assume all elements are scenarios unless explicitly marked otherwise
+        else if (format === 'wdio') {
+          // WebdriverIO elements are scenarios by default, but exclude if type is explicitly 'background' or 'hook'
+          if (element.type && !element.type.toLowerCase().includes('scenario')) {
+            isScenario = false;
+          }
+        }
+        
         if (!isScenario) continue;
         totalScenarios++;
 

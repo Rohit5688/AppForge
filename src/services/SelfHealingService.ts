@@ -21,6 +21,7 @@ export interface SelectorVerification {
 
 import type { AppiumSessionService } from './AppiumSessionService.js';
 import type { LearningService } from './LearningService.js';
+import { ScreenshotStorage } from '../utils/ScreenshotStorage.js';
 
 export class SelfHealingService {
   private sessionService: AppiumSessionService | null = null;
@@ -49,11 +50,13 @@ export class SelfHealingService {
   /**
    * Analyzes a Mobile Automation test failure using XML Hierarchy + Screenshots.
    * Parses the failure output to identify the broken selector, then scans XML for alternatives.
+   * 
+   * SCREENSHOT FIX: Now accepts screenshotPath instead of base64 to prevent context overflow.
    */
   public async analyzeMobileFailure(
     testOutput: string,
     xmlHierarchy: string,
-    screenshotBase64: string
+    screenshotPath: string
   ): Promise<HealingInstruction> {
     // 1. Classify the root cause
     const isLocatorIssue = /NoSuchElementError|TimeoutError|element.*not.*found|stale element/i.test(testOutput);
@@ -107,12 +110,14 @@ export class SelfHealingService {
 
   /**
    * Generates a Vision-Enriched prompt for the LLM to heal the mobile locator.
-   * Includes the XML tree, parsed elements, AND a reference to the Base64 screenshot.
+   * Includes the XML tree, parsed elements, AND a reference to the screenshot file path.
+   * 
+   * SCREENSHOT FIX: Now references screenshot file path instead of embedding base64.
    */
   public buildVisionHealPrompt(
     instruction: HealingInstruction,
     xml: string,
-    screenshotBase64?: string
+    screenshotPath?: string
   ): string {
     const alternativesBlock = instruction.alternativeSelectors?.length
       ? `### 🎯 SUGGESTED ALTERNATIVES (from XML)\n${instruction.alternativeSelectors.map((s, i) => `${i + 1}. \`${s}\``).join('\n')}\n`
@@ -137,7 +142,7 @@ ${prunedXml}
 \`\`\`
 ${xml.length > 10000 ? '... (truncated, full XML was ' + xml.length + ' chars)' : ''}
 
-${screenshotBase64 ? '### 🖼️ VISION CONTEXT\nA Base64 screenshot of the current device state is attached. Use it to visually identify the target element.\n' : ''}
+${screenshotPath ? `### 🖼️ VISION CONTEXT\nScreenshot saved at: ${screenshotPath}\nUse this for visual confirmation of the current device state.\n` : ''}
 ### 🎯 YOUR TASK
 1. Analyze the XML hierarchy and the screenshot to find the element the test was trying to interact with.
 2. Determine the BEST new selector. Use this priority: \`accessibility-id (~id)\` > \`resource-id\` > \`xpath\` > \`text\`.
@@ -157,21 +162,28 @@ ${screenshotBase64 ? '### 🖼️ VISION CONTEXT\nA Base64 screenshot of the cur
    * Orchestrates a self-healing retry loop:
    * analyze failure → build heal prompt → (LLM heals) → rewrite → re-run
    * Returns the healing instruction for the LLM at each step.
+   * 
+   * SCREENSHOT FIX: Now uses screenshot storage instead of passing base64.
    */
   public async healWithRetry(
     testOutput: string,
     xmlHierarchy: string,
-    screenshotBase64: string,
+    screenshotPath: string,
     attempt: number = 1,
     maxAttempts: number = 3
   ): Promise<{ instruction: HealingInstruction; prompt: string; attempt: number; exhausted: boolean }> {
     // If live session is available, use fresh data instead of stale input
     let xml = xmlHierarchy;
-    let screenshot = screenshotBase64;
+    let screenshot = screenshotPath;
     if (this.sessionService?.isSessionActive()) {
       try {
         xml = await this.sessionService.getPageSource();
-        screenshot = await this.sessionService.takeScreenshot();
+        const screenshotBase64 = await this.sessionService.takeScreenshot();
+        // Store screenshot instead of passing base64
+        const projectRoot = process.cwd();
+        const storage = new ScreenshotStorage(projectRoot);
+        const stored = storage.store(screenshotBase64, 'heal');
+        screenshot = stored.relativePath;
       } catch {
         // Fall back to provided data
       }

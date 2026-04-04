@@ -42,8 +42,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     }
   };
 
-  test('should generate a valid prompt string', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('should generate a valid prompt string', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -54,8 +54,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     assert.ok(prompt.length > 0);
   });
 
-  test('[ISSUE #11] prompt header should identify framework as Appium + WebdriverIO + @cucumber/cucumber', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('[ISSUE #11] prompt header should identify framework as Appium + WebdriverIO + @cucumber/cucumber', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -68,8 +68,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     );
   });
 
-  test('[ISSUE #11] prompt must NOT contain the word "Playwright"', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('[ISSUE #11] prompt must NOT contain the word "Playwright"', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -82,8 +82,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     );
   });
 
-  test('[ISSUE #11] prompt must include explicit constraint against Playwright imports', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('[ISSUE #11] prompt must include explicit constraint against Playwright imports', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -112,8 +112,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     );
   });
 
-  test('[ISSUE #11] prompt must emphasize WebdriverIO and Appium usage', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('[ISSUE #11] prompt must emphasize WebdriverIO and Appium usage', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -125,8 +125,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     assert.ok(prompt.includes('Appium'), 'Expected Appium mention');
   });
 
-  test('[ISSUE #11] prompt must include critical constraint warning with emphasis marker', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('[ISSUE #11] prompt must include critical constraint warning with emphasis marker', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -139,8 +139,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     );
   });
 
-  test('should handle optional parameters (testName, screenXml, screenshotBase64)', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('should handle optional parameters (testName, screenXml, screenshotBase64)', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in with valid credentials',
       mockConfig,
@@ -156,7 +156,7 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     assert.ok(prompt.includes('[IMAGE] SCREENSHOT'), 'Expected screenshot section');
   });
 
-  test('should include existing code reuse sections', () => {
+  test('should include existing code reuse sections', async () => {
     const analysisWithCode: CodebaseAnalysisResult = {
       ...mockAnalysis,
       existingStepDefinitions: [
@@ -178,7 +178,7 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
       ]
     };
 
-    const prompt = service.generateAppiumPrompt(
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'Test a feature',
       mockConfig,
@@ -191,10 +191,10 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     assert.ok(prompt.includes('LoginPage.ts'));
   });
 
-  test('should include learning prompt if provided', () => {
+  test('should include learning prompt if provided', async () => {
     const learningPrompt = 'Always use accessibility-id selectors for buttons.';
 
-    const prompt = service.generateAppiumPrompt(
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in',
       mockConfig,
@@ -206,8 +206,8 @@ describe('TestGenerationService — Issue #11 Fix Validation', () => {
     assert.ok(prompt.includes(learningPrompt));
   });
 
-  test('should specify correct JSON output format with jsonPageObjects', () => {
-    const prompt = service.generateAppiumPrompt(
+  test('should specify correct JSON output format with jsonPageObjects', async () => {
+    const prompt = await service.generateAppiumPrompt(
       '/test/project',
       'User logs in',
       mockConfig,

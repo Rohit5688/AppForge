@@ -26,6 +26,11 @@ export interface McpConfig {
     stepsRoot?: string;
     utilsRoot?: string;
     testDataRoot?: string;
+    reportsRoot?: string;
+  };
+  execution?: {
+    timeoutMs?: number;
+    reportPath?: string;
   };
   reuse?: {
     locatorOrder?: string[];
@@ -48,7 +53,8 @@ function resolvePaths(config: McpConfig) {
     pagesRoot: config.paths?.pagesRoot ?? 'pages',
     stepsRoot: config.paths?.stepsRoot ?? 'step-definitions',
     utilsRoot: config.paths?.utilsRoot ?? 'utils',
-    testDataRoot: config.paths?.testDataRoot ?? 'src/test-data'
+    testDataRoot: config.paths?.testDataRoot ?? 'src/test-data',
+    reportsRoot: config.paths?.reportsRoot ?? 'reports'
   };
 }
 

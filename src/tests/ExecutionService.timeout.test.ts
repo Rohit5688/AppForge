@@ -132,29 +132,32 @@ describe('ExecutionService - Timeout Resolution', () => {
       }
     });
 
-    it('should detect timeout from playwright.config.ts', async () => {
+    it('should detect cucumberOpts.timeout from wdio.conf.ts', async () => {
       setupTest();
       try {
-        // Create playwright.config.ts with timeout
-        const playwrightConfig = `
-export default {
-  timeout: 180000,
-  use: {
-    baseURL: 'http://localhost:3000'
-  }
-}
+        // Overwrite the minimal wdio.conf.ts with one that has cucumberOpts.timeout
+        const wdioConfig = `
+export const config = {
+  runner: 'local',
+  framework: 'cucumber',
+  cucumberOpts: {
+    require: ['./src/step-definitions/**/*.ts'],
+    timeout: 180000,
+  },
+  waitforTimeout: 10000,
+};
 `;
         fs.writeFileSync(
-          path.join(testProjectRoot, 'playwright.config.ts'),
-          playwrightConfig
+          path.join(testProjectRoot, 'wdio.conf.ts'),
+          wdioConfig
         );
 
         const result = await executionService['runTest'](testProjectRoot);
 
-        assert.ok(result.output.includes('source: detected(playwright.config)'), 
-          'Output should show detected timeout source');
-        assert.ok(result.output.includes('180000ms'), 
-          'Output should show 180000ms timeout from playwright config');
+        assert.ok(result.output.includes('source: detected(wdio.conf)'),
+          'Output should show detected(wdio.conf) timeout source');
+        assert.ok(result.output.includes('180000ms'),
+          'Output should show 180000ms timeout from wdio.conf cucumberOpts');
       } finally {
         cleanupTest();
       }
@@ -211,10 +214,10 @@ export default {
       }
     });
 
-    it('should prioritize mcp-config over detected', async () => {
+    it('should prioritize mcp-config over detected wdio.conf timeout', async () => {
       setupTest();
       try {
-        // Create both mcp-config and playwright config
+        // Create mcp-config with its own timeout
         const mcpConfig = {
           version: '1.0.0',
           project: {
@@ -234,50 +237,54 @@ export default {
           JSON.stringify(mcpConfig, null, 2)
         );
 
-        const playwrightConfig = `
-export default {
-  timeout: 180000
-}
+        // Overwrite wdio.conf.ts with a different timeout
+        const wdioConfig = `
+export const config = {
+  runner: 'local',
+  framework: 'cucumber',
+  cucumberOpts: {
+    timeout: 180000,
+  },
+};
 `;
         fs.writeFileSync(
-          path.join(testProjectRoot, 'playwright.config.ts'),
-          playwrightConfig
+          path.join(testProjectRoot, 'wdio.conf.ts'),
+          wdioConfig
         );
 
         const result = await executionService['runTest'](testProjectRoot);
 
-        assert.ok(result.output.includes('source: mcp-config'), 
-          'mcp-config timeout should take priority over detected');
-        assert.ok(result.output.includes('120000ms'), 
-          'Output should show mcp-config timeout, not playwright timeout');
+        assert.ok(result.output.includes('source: mcp-config'),
+          'mcp-config timeout should take priority over detected wdio.conf timeout');
+        assert.ok(result.output.includes('120000ms'),
+          'Output should show mcp-config timeout, not wdio.conf timeout');
       } finally {
         cleanupTest();
       }
     });
 
-    it('should detect expect.timeout from playwright config', async () => {
+    it('should detect waitforTimeout from wdio.conf.js', async () => {
       setupTest();
       try {
-        const playwrightConfig = `
+        // Use .js variant with only waitforTimeout (no cucumberOpts.timeout)
+        const wdioConfig = `
 module.exports = {
-  use: {
-    expect: {
-      timeout: 90000
-    }
-  }
-}
+  runner: 'local',
+  framework: 'cucumber',
+  waitforTimeout: 90000,
+};
 `;
         fs.writeFileSync(
-          path.join(testProjectRoot, 'playwright.config.js'),
-          playwrightConfig
+          path.join(testProjectRoot, 'wdio.conf.js'),
+          wdioConfig
         );
 
         const result = await executionService['runTest'](testProjectRoot);
 
-        assert.ok(result.output.includes('source: detected(playwright.config)'), 
-          'Should detect timeout from expect.timeout');
-        assert.ok(result.output.includes('90000ms'), 
-          'Output should show 90000ms from expect.timeout');
+        assert.ok(result.output.includes('source: detected(wdio.conf)'),
+          'Should detect timeout from waitforTimeout in wdio.conf.js');
+        assert.ok(result.output.includes('90000ms'),
+          'Output should show 90000ms from waitforTimeout');
       } finally {
         cleanupTest();
       }

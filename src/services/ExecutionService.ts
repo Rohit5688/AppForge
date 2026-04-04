@@ -4,6 +4,7 @@ import path from 'path';
 import type { AppiumSessionService } from './AppiumSessionService.js';
 import { McpConfigService } from './McpConfigService.js';
 import { Questioner } from '../utils/Questioner.js';
+import { ScreenshotStorage } from '../utils/ScreenshotStorage.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -21,7 +22,8 @@ export interface ExecutionResult {
   };
   /** Populated on failure when a live Appium session is available */
   failureContext?: {
-    screenshot: string;
+    screenshotPath: string;
+    screenshotSize: number;
     pageSource: string;
     timestamp: string;
   };
@@ -87,7 +89,7 @@ export class ExecutionService {
    * - Supports configurable timeout with resolution order:
    *   1. Explicit timeoutMs parameter
    *   2. mcp-config.json execution.timeoutMs
-   *   3. Detected from playwright.config.ts (if present)
+   *   3. Detected from wdio.conf.ts (cucumberOpts.timeout or waitforTimeout)
    *   4. Default: 30 minutes (1800000 ms)
    */
   public async runTest(
@@ -100,35 +102,37 @@ export class ExecutionService {
       timeoutMs?: number;
     }
   ): Promise<ExecutionResult> {
+    // Issue #17: Validate tag expression and specific args upfront (fast-fail, before timeout resolution)
+    if (options?.tags && !this.validateTagExpression(options.tags)) {
+      return {
+        success: false,
+        output: '',
+        error: `Invalid tag expression: "${options.tags}". Tags must only contain alphanumeric characters, @, spaces, parentheses, and logical operators (!, &, |, comma).`
+      };
+    }
+
+    if (options?.specificArgs && !this.validateSpecificArgs(options.specificArgs)) {
+      return {
+        success: false,
+        output: '',
+        error: `Invalid specificArgs: "${options.specificArgs}". Arguments must not contain shell metacharacters (;, &, |, backtick, $, >, <, quotes, backslash, !).`
+      };
+    }
+
+    // Resolve config + timeout BEFORE the execution try-catch so that:
+    //   1. Invalid timeoutMs throws and rejects the promise (instead of being swallowed)
+    //   2. The resolved timeout is available in the catch block for output logging
+    const configService = new McpConfigService();
+    let config;
     try {
-      // Issue #17: Validate tag expression and specific args upfront
-      if (options?.tags && !this.validateTagExpression(options.tags)) {
-        return {
-          success: false,
-          output: '',
-          error: `Invalid tag expression: "${options.tags}". Tags must only contain alphanumeric characters, @, spaces, parentheses, and logical operators (!, &, |, comma).`
-        };
-      }
+      config = configService.read(projectRoot);
+    } catch {
+      config = null;
+    }
+    // resolveTimeout throws for invalid values → propagates to caller
+    const timeout = await this.resolveTimeout(projectRoot, options?.timeoutMs, config);
 
-      if (options?.specificArgs && !this.validateSpecificArgs(options.specificArgs)) {
-        return {
-          success: false,
-          output: '',
-          error: `Invalid specificArgs: "${options.specificArgs}". Arguments must not contain shell metacharacters (;, &, |, backtick, $, >, <, quotes, backslash, !).`
-        };
-      }
-
-      const configService = new McpConfigService();
-      let config;
-      try {
-        config = configService.read(projectRoot);
-      } catch {
-        config = null;
-      }
-
-      // Resolve timeout with priority: explicit > config > detect > default
-      const timeout = await this.resolveTimeout(projectRoot, options?.timeoutMs, config);
-      
+    try {
       const fs = await import('fs');
       let command = '';
       if (options?.overrideCommand) {
@@ -244,8 +248,13 @@ export class ExecutionService {
       let failureContext: ExecutionResult['failureContext'];
       if (this.sessionService?.isSessionActive()) {
         try {
+          const screenshot = await this.sessionService.takeScreenshot();
+          const storage = new ScreenshotStorage(projectRoot);
+          const stored = storage.store(screenshot, 'failure');
+          
           failureContext = {
-            screenshot: await this.sessionService.takeScreenshot(),
+            screenshotPath: stored.relativePath,
+            screenshotSize: stored.size,
             pageSource: await this.sessionService.getPageSource(),
             timestamp: new Date().toISOString()
           };
@@ -256,7 +265,8 @@ export class ExecutionService {
 
       return {
         success: false,
-        output: error.stdout || '',
+        // Include timeout prefix in failure output so callers can always see resolution source
+        output: `[Timeout: ${timeout.value}ms (source: ${timeout.source})]\n\n${error.stdout || ''}`,
         error: error.stderr || error.message,
         stats,
         failureContext
@@ -269,10 +279,16 @@ export class ExecutionService {
    * If no xmlDump is provided and a live session exists, auto-fetches from the device.
    * 
    * Issue #15 FIX: Now generates valid locatorStrategies for each element.
+   * SCREENSHOT STORAGE FIX: Requires projectRoot to store screenshots correctly in MCP context.
    */
-  public async inspectHierarchy(xmlDump?: string, screenshotBase64?: string): Promise<{
+  public async inspectHierarchy(
+    projectRoot: string,
+    xmlDump?: string,
+    screenshotBase64?: string
+  ): Promise<{
     xml: string;
-    screenshot: string;
+    screenshotPath?: string;
+    screenshotSize?: number;
     timestamp: string;
     elements: ParsedElement[];
     source: 'provided' | 'live_session';
@@ -298,9 +314,21 @@ export class ExecutionService {
     // Parse the XML to extract interactable elements with valid locator strategies
     const elements = this.parseXmlElements(xml);
 
+    // Store screenshot locally instead of returning base64 in response
+    let screenshotPath: string | undefined;
+    let screenshotSize: number | undefined;
+    
+    if (screenshot) {
+      const storage = new ScreenshotStorage(projectRoot);
+      const stored = storage.store(screenshot, 'inspect');
+      screenshotPath = stored.relativePath;
+      screenshotSize = stored.size;
+    }
+
     return {
       xml,
-      screenshot,
+      screenshotPath,
+      screenshotSize,
       timestamp: new Date().toISOString(),
       elements,
       source
@@ -449,10 +477,10 @@ export class ExecutionService {
       }
     }
 
-    // 3. Detect from project (playwright.config.ts/js or package.json)
+    // 3. Detect from project (wdio.conf.ts/js)
     const detectedTimeout = await this.detectProjectTimeout(projectRoot);
     if (detectedTimeout) {
-      return { value: detectedTimeout, source: 'detected(playwright.config)' };
+      return { value: detectedTimeout, source: 'detected(wdio.conf)' };
     }
 
     // 4. Default: 30 minutes
@@ -460,7 +488,8 @@ export class ExecutionService {
   }
 
   /**
-   * Attempts to detect timeout from playwright.config.ts/js.
+   * Attempts to detect timeout from wdio.conf.ts/js.
+   * Looks for cucumberOpts.timeout (per-step timeout) or waitforTimeout (element wait timeout).
    * Best-effort detection using regex patterns.
    */
   private async detectProjectTimeout(projectRoot: string): Promise<number | null> {
@@ -468,8 +497,8 @@ export class ExecutionService {
       const fs = await import('fs');
       const path = await import('path');
 
-      // Check for playwright.config.ts or playwright.config.js
-      const configFiles = ['playwright.config.ts', 'playwright.config.js'];
+      // Check for wdio.conf.ts or wdio.conf.js
+      const configFiles = ['wdio.conf.ts', 'wdio.conf.js'];
       
       for (const configFile of configFiles) {
         const configPath = path.default.join(projectRoot, configFile);
@@ -477,22 +506,22 @@ export class ExecutionService {
 
         const content = fs.default.readFileSync(configPath, 'utf8');
 
-        // Look for timeout: <number> pattern
-        const timeoutMatch = content.match(/timeout\s*:\s*(\d+)/);
-        if (timeoutMatch) {
-          const timeout = parseInt(timeoutMatch[1], 10);
+        // Priority 1: cucumberOpts.timeout — per-step Cucumber timeout
+        const cucumberTimeoutMatch = content.match(/cucumberOpts[\s\S]{0,200}?timeout\s*:\s*(\d+)/);
+        if (cucumberTimeoutMatch) {
+          const timeout = parseInt(cucumberTimeoutMatch[1], 10);
           if (timeout > 0) {
-            console.log(`[AppForge] ℹ️ Detected timeout from ${configFile}: ${timeout}ms`);
+            console.log(`[AppForge] ℹ️ Detected cucumberOpts.timeout from ${configFile}: ${timeout}ms`);
             return timeout;
           }
         }
 
-        // Look for expect.timeout or testTimeout
-        const expectTimeoutMatch = content.match(/(?:expect\.timeout|testTimeout)\s*:\s*(\d+)/);
-        if (expectTimeoutMatch) {
-          const timeout = parseInt(expectTimeoutMatch[1], 10);
+        // Priority 2: waitforTimeout — global element wait timeout
+        const waitforTimeoutMatch = content.match(/waitforTimeout\s*:\s*(\d+)/);
+        if (waitforTimeoutMatch) {
+          const timeout = parseInt(waitforTimeoutMatch[1], 10);
           if (timeout > 0) {
-            console.log(`[AppForge] ℹ️ Detected timeout from ${configFile}: ${timeout}ms`);
+            console.log(`[AppForge] ℹ️ Detected waitforTimeout from ${configFile}: ${timeout}ms`);
             return timeout;
           }
         }

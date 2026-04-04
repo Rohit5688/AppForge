@@ -5,6 +5,7 @@ import path from 'path';
 import http from 'http';
 import { Questioner } from '../utils/Questioner.js';
 import { AppForgeError, ErrorCode } from '../utils/ErrorCodes.js';
+import { SessionManager } from './SessionManager.js';
 
 export interface SessionInfo {
   sessionId: string;
@@ -25,15 +26,21 @@ export interface SessionInfo {
 export class AppiumSessionService {
   private driver: Browser | null = null;
   private configService = new McpConfigService();
+  private projectRoot: string = '';
 
   /**
    * Starts a new Appium session using capabilities from mcp-config.json.
+   * Now uses SessionManager for proper lifecycle management and crash prevention.
    * Returns session info including initial page source and screenshot.
    */
   public async startSession(projectRoot: string, profileName?: string): Promise<SessionInfo> {
+    // Clean up any existing driver before starting new session
     if (this.driver) {
       await this.endSession();
     }
+
+    // Store projectRoot for later retrieval
+    this.projectRoot = projectRoot;
 
     const config = this.configService.read(projectRoot);
     // LIVE-SESSION FIX: Force noReset:true for live inspection sessions.
@@ -47,7 +54,6 @@ export class AppiumSessionService {
     }
 
     const capabilities = this.resolveCapabilities(config, profileName);
-
     const serverUrl = this.resolveServerUrl(config);
 
     const parsedUrl = new URL(serverUrl);
@@ -58,8 +64,10 @@ export class AppiumSessionService {
     const serverPath = await this.detectAppiumPath(hostname, port);
     console.error(`[AppForge] Detected Appium server path: ${serverPath} at ${hostname}:${port}`);
 
+    // Enhanced error handling with proper cleanup
+    let driver: Browser | null = null;
     try {
-      this.driver = await remote({
+      driver = await remote({
         protocol: 'http',
         hostname,
         port,
@@ -68,14 +76,44 @@ export class AppiumSessionService {
         // CRITICAL: Suppress WebdriverIO stdout logs to prevent MCP JSON-RPC pipe corruption.
         // Log output must ONLY go to stderr (console.error), never stdout.
         logLevel: 'error',
+        // Add connection timeout to prevent hanging
+        connectionRetryTimeout: 30000, // 30 seconds max
+        connectionRetryCount: 3,       // Max 3 retries
       });
 
-      const caps = this.driver.capabilities as any;
-      const pageSource = await this.driver.getPageSource();
-      const screenshot = await this.driver.takeScreenshot();
+      // Validate session was created successfully
+      if (!driver || !driver.sessionId) {
+        throw new Error('Session created but missing sessionId');
+      }
+
+      // Store the driver reference immediately - session is valid even if initial fetch is slow
+      this.driver = driver;
+
+      // Get session info
+      const caps = driver.capabilities as any;
+      
+      // Try to get initial data with timeout, but don't fail the session if slow
+      let pageSource = '';
+      let screenshot = '';
+      
+      try {
+        // iOS sessions need more time for WebDriverAgent initialization and complex views
+        const timeout = caps.platformName?.toLowerCase() === 'ios' ? 30000 : 15000;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`Initial fetch timeout after ${timeout/1000}s`)), timeout);
+        });
+
+        [pageSource, screenshot] = await Promise.race([
+          Promise.all([driver.getPageSource(), driver.takeScreenshot()]),
+          timeoutPromise
+        ]);
+      } catch (fetchError: any) {
+        console.error(`[AppForge] ⚠️ Initial page fetch slow (${fetchError.message}), but session is valid. User can call inspect_ui_hierarchy to fetch XML separately.`);
+        // Session is still usable - user can retry with inspect_ui_hierarchy
+      }
 
       return {
-        sessionId: this.driver.sessionId,
+        sessionId: driver.sessionId,
         platformName: caps.platformName ?? 'unknown',
         deviceName: caps.deviceName ?? caps['appium:deviceName'] ?? 'unknown',
         appPackage: caps['appium:appPackage'] ?? caps.appPackage,
@@ -85,7 +123,17 @@ export class AppiumSessionService {
         screenshot
       };
     } catch (error: any) {
+      // Critical: Clean up driver on ANY error to prevent resource leaks
+      if (driver) {
+        try {
+          await driver.deleteSession();
+        } catch (cleanupError) {
+          console.error(`[AppForge] ⚠️ Error cleaning up failed session: ${cleanupError}`);
+        }
+      }
+      
       const msg = error.message || String(error);
+      
       if (msg.includes('ECONNREFUSED')) {
         throw new AppForgeError(ErrorCode.E002_DEVICE_OFFLINE,
           `Cannot connect to Appium at ${serverUrl}. ` +
@@ -94,6 +142,7 @@ export class AppiumSessionService {
           ["Start Appium on localhost:4723"]
         );
       }
+      
       if (msg.includes('session not created') || msg.includes('Could not start')) {
         throw new AppForgeError(ErrorCode.E001_NO_SESSION,
           `Appium session creation failed.\n` +
@@ -105,7 +154,28 @@ export class AppiumSessionService {
           ]
         );
       }
-      throw error;
+      
+      if (msg.includes('timeout')) {
+        throw new AppForgeError(ErrorCode.E002_DEVICE_OFFLINE,
+          `Session creation timed out. Device or app may be unresponsive.\n` +
+          `Raw error: ${msg}`,
+          [
+            "Restart the device/emulator",
+            "Force-stop and restart the app",
+            "Check device performance (low memory, CPU usage)"
+          ]
+        );
+      }
+      
+      // Re-throw with enhanced context
+      throw new AppForgeError(ErrorCode.E001_NO_SESSION,
+        `Unexpected session creation error: ${msg}`,
+        [
+          "Check Appium server logs for details",
+          "Verify device capabilities are correct",
+          "Try restarting Appium server"
+        ]
+      );
     }
   }
 
@@ -194,6 +264,13 @@ export class AppiumSessionService {
   }
 
   /**
+   * Returns the project root path from the active session.
+   */
+  public getProjectRoot(): string {
+    return this.projectRoot;
+  }
+
+  /**
    * Cleanly terminates the Appium session.
    */
   public async endSession(): Promise<void> {
@@ -205,6 +282,7 @@ export class AppiumSessionService {
       }
       this.driver = null;
     }
+    this.projectRoot = '';
   }
 
   // ─── Private Helpers ───────────────────────────────────

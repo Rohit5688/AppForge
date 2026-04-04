@@ -25,9 +25,11 @@ import { RefactoringService } from "./services/RefactoringService.js";
 import { BugReportService } from "./services/BugReportService.js";
 import { TestDataService } from "./services/TestDataService.js";
 import { AppiumSessionService } from "./services/AppiumSessionService.js";
+import { SessionManager } from "./services/SessionManager.js";
 import { ProjectMaintenanceService } from "./services/ProjectMaintenanceService.js";
 import { CoverageAnalysisService } from "./services/CoverageAnalysisService.js";
 import { MigrationService } from "./services/MigrationService.js";
+import { NavigationGraphService } from "./services/NavigationGraphService.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import { executeSandbox } from "./services/SandboxEngine.js";
@@ -60,6 +62,8 @@ class AppForgeServer {
   private projectMaintenanceService = new ProjectMaintenanceService();
   private coverageAnalysisService = new CoverageAnalysisService();
   private migrationService = new MigrationService();
+  // MEMORY LEAK FIX: Instance pooling for NavigationGraphService to prevent creating new instances per tool call
+  private navigationGraphServices = new Map<string, NavigationGraphService>();
 
   constructor() {
     this.server = new Server(
@@ -215,7 +219,7 @@ class AppForgeServer {
         },
         {
           name: "run_cucumber_test",
-          description: "RUN TESTS. Use when the user says 'run my tests / execute / run @smoke'. Executes the Appium Cucumber suite. Auto-detects execution command from mcp-config.json — falls back to npx wdio run wdio.conf.ts if not configured. Supports Cucumber tag expressions and platform filtering. Timeout resolution: explicit timeoutMs > mcp-config.json execution.timeoutMs > detected from playwright.config > default (30 min). Returns: { success, output, stats: { total, passed, failed, skipped }, reportPath }. If tests fail, pass the output to self_heal_test to fix broken locators.",
+          description: "RUN TESTS. Use when the user says 'run my tests / execute / run @smoke'. Executes the Appium Cucumber suite. Auto-detects execution command from mcp-config.json — falls back to npx wdio run wdio.conf.ts if not configured. Supports Cucumber tag expressions and platform filtering. Timeout resolution: explicit timeoutMs > mcp-config.json execution.timeoutMs > detected from wdio.conf > default (30 min). Returns: { success, output, stats: { total, passed, failed, skipped }, reportPath }. If tests fail, pass the output to self_heal_test to fix broken locators.",
           inputSchema: {
             type: "object",
             properties: {
@@ -231,10 +235,11 @@ class AppForgeServer {
         },
         {
           name: "inspect_ui_hierarchy",
-          description: "SEE WHAT'S ON SCREEN. Two modes: (1) NO ARGS — fetches live XML and screenshot from the active Appium session. ⚡ REQUIRES ACTIVE SESSION — call start_appium_session first. (2) Pass xmlDump — parses offline with no session needed. Returns: { source ('live'|'provided'), elements[]: [{ id, text, className, bounds, locatorStrategies[] }], screenshot }. Use locatorStrategies to build accurate Page Object selectors.",
+          description: "SEE WHAT'S ON SCREEN. Two modes: (1) NO ARGS — fetches live XML and screenshot from the active Appium session. ⚡ REQUIRES ACTIVE SESSION — call start_appium_session first. (2) Pass xmlDump — parses offline with no session needed. Returns: { source ('live'|'provided'), elements[]: [{ id, text, className, bounds, locatorStrategies[] }], screenshotPath, screenshotSize }. Screenshot is saved locally to prevent context overflow. Use locatorStrategies to build accurate Page Object selectors.",
           inputSchema: {
             type: "object",
             properties: {
+              projectRoot: { type: "string", description: "Optional: Project root path. Auto-detected from active session if omitted." },
               xmlDump: { type: "string", description: "Optional: Appium XML page source. When omitted, live XML is fetched automatically from the active session." },
               screenshotBase64: { type: "string" }
             },
@@ -243,10 +248,11 @@ class AppForgeServer {
         },
         {
           name: "self_heal_test",
-          description: "FIX BROKEN TESTS. Use when a test failure says 'element not found / no such element / selector not found'. Parses the error and current XML to find the correct replacement selector. Returns: { candidates[]: [{ selector, strategy, confidence, rationale }], promptForLLM: guidance text }. After getting candidates, use verify_selector to confirm the best one works. Then update your Page Object and call train_on_example to remember the fix.",
+          description: "FIX BROKEN TESTS. Use when a test failure says 'element not found / no such element / selector not found'. Parses the error and current XML to find the correct replacement selector. Returns: { candidates[]: [{ selector, strategy, confidence, rationale }], promptForLLM: guidance text }. Screenshots are automatically stored locally to prevent context overflow. After getting candidates, use verify_selector to confirm the best one works. Then update your Page Object and call train_on_example to remember the fix.",
           inputSchema: {
             type: "object",
             properties: {
+              projectRoot: { type: "string", description: "Optional: Project root path. Auto-detected from active session if omitted." },
               testOutput: { type: "string" },
               xmlHierarchy: { type: "string" },
               screenshotBase64: { type: "string" },
@@ -493,6 +499,19 @@ class AppForgeServer {
             },
             required: []
           }
+        },
+        {
+          name: "extract_navigation_map",
+          description: "EXTRACT APP NAVIGATION FLOW. Use when the user says 'understand the app flow / map the navigation / how do I get to X screen'. Analyzes existing step definitions, page objects, and test flows to build a navigation graph. Helps LLMs understand multi-screen app navigation patterns for intelligent test generation. Returns: { navigationMap: graph of screen connections, reusableFlows: common navigation paths, suggestions: how to reuse existing navigation steps }.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              projectRoot: { type: "string" },
+              targetScreen: { type: "string", description: "Optional specific screen or feature to analyze navigation paths to." },
+              includeCommonFlows: { type: "boolean", description: "Whether to extract common multi-step navigation patterns (default: true)." }
+            },
+            required: ["projectRoot"]
+          }
         }
       ],
     }));
@@ -545,7 +564,7 @@ class AppForgeServer {
             }
 
             const learningPrompt = this.learningService.getKnowledgePromptInjection(args.projectRoot);
-            const prompt = this.generationService.generateAppiumPrompt(
+            const prompt = await this.generationService.generateAppiumPrompt(
               args.projectRoot,
               args.testDescription,
               config,
@@ -586,16 +605,59 @@ class AppForgeServer {
           }
 
           case "inspect_ui_hierarchy": {
-            // Pass raw arguments down. ExecutionService will auto-fetch XML + screenshot if xmlDump is missing.
-            const result = await this.executionService.inspectHierarchy(args.xmlDump, args.screenshotBase64);
+            // Get projectRoot from args or active session
+            let projectRoot = args.projectRoot;
+            
+            // If no projectRoot provided but session is active, get it from session
+            if (!projectRoot && this.appiumSessionService.isSessionActive()) {
+              projectRoot = this.appiumSessionService.getProjectRoot();
+            }
+            
+            if (!projectRoot) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    action: 'ERROR',
+                    code: 'MISSING_PROJECT_ROOT',
+                    message: 'projectRoot is required when no active session exists',
+                    hint: 'Either start a session with start_appium_session or provide projectRoot parameter'
+                  }, null, 2)
+                }],
+                isError: true
+              };
+            }
+            
+            const result = await this.executionService.inspectHierarchy(projectRoot, args.xmlDump, args.screenshotBase64);
             return this.textResult(JSON.stringify(result, null, 2));
           }
 
           case "self_heal_test": {
+            // Get projectRoot from args or active session
+            let projectRoot = args.projectRoot;
+            
+            if (!projectRoot && this.appiumSessionService.isSessionActive()) {
+              projectRoot = this.appiumSessionService.getProjectRoot();
+            }
+            
+            // If still no projectRoot, use cwd as fallback (better than crashing)
+            if (!projectRoot) {
+              projectRoot = process.cwd();
+              console.warn('[AppForge] ⚠️ No projectRoot provided and no active session. Using process.cwd() as fallback.');
+            }
+            
+            // If screenshot is provided as base64, store it first
+            let screenshotPath = '';
+            if (args.screenshotBase64) {
+              const storage = new (await import('./utils/ScreenshotStorage.js')).ScreenshotStorage(projectRoot);
+              const stored = storage.store(args.screenshotBase64, 'heal-input');
+              screenshotPath = stored.relativePath;
+            }
+            
             const healResult = await this.selfHealingService.healWithRetry(
               args.testOutput,
               args.xmlHierarchy,
-              args.screenshotBase64 ?? '',
+              screenshotPath,
               args.attempt ?? 1
             );
             return this.textResult(JSON.stringify({
@@ -722,16 +784,34 @@ class AppForgeServer {
             return this.textResult(`⚠️ SYSTEM HALT — HUMAN INPUT REQUIRED\n\n**Question**: ${args.question}\n\n**Context**: ${args.context}\n${args.options ? '\n**Options**:\n' + args.options.map((o: string, i: number) => `${i + 1}. ${o}`).join('\n') : ''}\n\nPlease answer the question above before continuing.`);
 
           case "start_appium_session": {
-            const sessionInfo = await this.appiumSessionService.startSession(args.projectRoot, args.profileName);
-            return this.textResult(JSON.stringify({
-              sessionId: sessionInfo.sessionId,
-              platform: sessionInfo.platformName,
-              device: sessionInfo.deviceName,
-              appPackage: sessionInfo.appPackage,
-              bundleId: sessionInfo.bundleId,
-              elementsFound: this.executionService['parseXmlElements'](sessionInfo.initialPageSource).length,
-              hint: `✅ Session started on ${sessionInfo.deviceName} (${sessionInfo.platformName}). NEXT: Call inspect_ui_hierarchy (no args) to fetch live XML and see what's on screen.`
-            }, null, 2));
+            // Use this.appiumSessionService directly — the SAME instance injected into
+            // ExecutionService and SelfHealingService, so inspect_ui_hierarchy can use it.
+            try {
+              const sessionInfo = await this.appiumSessionService.startSession(args.projectRoot, args.profileName);
+              
+              return this.textResult(JSON.stringify({
+                sessionId: sessionInfo.sessionId,
+                platform: sessionInfo.platformName,
+                device: sessionInfo.deviceName,
+                bundleId: sessionInfo.bundleId,
+                elementsFound: 0,
+                hint: `✅ Session created successfully for ${args.projectRoot}. NEXT: Call inspect_ui_hierarchy (no args) to fetch live XML and see what's on screen.`,
+                note: 'Initial page data will be fetched by inspect_ui_hierarchy to avoid blocking on slow device responses.'
+              }, null, 2));
+            } catch (error: any) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    action: 'ERROR',
+                    code: 'SESSION_START_FAILED',
+                    message: error.message || String(error),
+                    hint: 'Verify Appium server is running (npx appium), device/emulator is connected, and mcp-config.json has valid capabilities.'
+                  }, null, 2)
+                }],
+                isError: true
+              };
+            }
           }
 
           case "end_appium_session": {
@@ -855,6 +935,14 @@ class AppForgeServer {
             return this.textResult(JSON.stringify({ workflows: result }, null, 2));
           }
 
+          case "extract_navigation_map": {
+            // MEMORY LEAK FIX: Use pooled NavigationGraphService instance per project
+            const navService = this.getNavigationGraphService(args.projectRoot);
+            const result = await navService.extractNavigationMap(args.projectRoot);
+            
+            return this.textResult(JSON.stringify(result, null, 2));
+          }
+
           default:
             throw new Error(`Unknown tool: ${request.params.name}`);
         }
@@ -918,6 +1006,17 @@ class AppForgeServer {
       }],
       isError: true as const
     };
+  }
+
+  /**
+   * MEMORY LEAK FIX: Get or create a NavigationGraphService instance for the given project.
+   * Prevents memory accumulation by reusing instances across tool calls.
+   */
+  private getNavigationGraphService(projectRoot: string): NavigationGraphService {
+    if (!this.navigationGraphServices.has(projectRoot)) {
+      this.navigationGraphServices.set(projectRoot, new NavigationGraphService(projectRoot));
+    }
+    return this.navigationGraphServices.get(projectRoot)!;
   }
 
   private textResult(text: string) {
