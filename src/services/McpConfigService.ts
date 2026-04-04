@@ -64,20 +64,31 @@ export class McpConfigService {
 
     try {
       const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      
-      // Auto-migration
-      if (!raw.version || raw.version === '1.0.0') {
-        raw.version = this.CURRENT_VERSION;
-        raw.$schema = './.AppForge/configSchema.json'; // Enables IDE autocompletion
-        this.write(projectRoot, raw);
-        this.generateSchema(projectRoot);
-      }
-
-      // Apply defaults so older configs don't crash
-      raw.paths = resolvePaths(raw);
       return raw as McpConfig;
     } catch (error: any) {
       throw new AppForgeError(ErrorCode.E005_CONFIG_CORRUPT, `Failed to parse mcp-config.json: ${error.message}. Fix the JSON syntax error (trailing comma, missing brace, etc.) and retry.`, ["Fix the JSON syntax error in mcp-config.json", "Run: npx jsonlint mcp-config.json"]);
+    }
+  }
+
+  /**
+   * Migrates an old-format mcp-config.json to the current schema version.
+   * Call ONLY from setup_project and upgrade_project — NOT from read().
+   * All other callers use read() for pure data access with zero side effects.
+   */
+  public migrateIfNeeded(projectRoot: string): void {
+    const configPath = path.join(projectRoot, this.configFileName);
+    if (!fs.existsSync(configPath)) return;
+
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (!raw.version || raw.version !== this.CURRENT_VERSION) {
+        raw.version = this.CURRENT_VERSION;
+        raw.$schema = './.AppForge/configSchema.json'; // Enables IDE autocompletion
+        fs.writeFileSync(configPath, JSON.stringify(raw, null, 2), 'utf8');
+        this.generateSchema(projectRoot);
+      }
+    } catch (error) {
+      // Ignored here if JSON is invalid, read() will throw properly
     }
   }
 
@@ -117,13 +128,42 @@ export class McpConfigService {
     }
   }
 
+  /**
+   * Recursively merges `source` into `target`.
+   * Arrays are replaced (not concatenated) — this matches config update expectations.
+   * Primitives in source always overwrite target.
+   */
+  private static deepMerge(target: any, source: any): any {
+    // Null/undefined source → keep target unchanged
+    if (source === null || source === undefined) return target;
+    // Non-object source → source replaces target
+    if (typeof source !== 'object' || Array.isArray(source)) return source;
+    // Both objects → merge recursively
+    const output: any = { ...target };
+    for (const key of Object.keys(source)) {
+      if (
+        source[key] !== null &&
+        typeof source[key] === 'object' &&
+        !Array.isArray(source[key]) &&
+        target?.[key] !== null &&
+        typeof target?.[key] === 'object' &&
+        !Array.isArray(target?.[key])
+      ) {
+        output[key] = McpConfigService.deepMerge(target[key], source[key]);
+      } else {
+        output[key] = source[key];
+      }
+    }
+    return output;
+  }
+
   public write(projectRoot: string, config: Partial<McpConfig>): void {
     const configPath = path.join(projectRoot, this.configFileName);
     let existingConfig: any = {};
     if (fs.existsSync(configPath)) {
       existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     }
-    const newConfig = { ...existingConfig, ...config };
+    const newConfig = McpConfigService.deepMerge(existingConfig, config);
     fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf-8');
   }
 

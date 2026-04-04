@@ -287,12 +287,12 @@ export class AppiumSessionService {
       );
     }
 
+    // REMOVED: Questioner.clarify for missing iOS bundleId.
+    // noReset:true is forced at session start, so Appium will attach to the running app
+    // without needing bundleId. If the session fails, Appium will produce a native error
+    // with a clear message — no need to halt with CLARIFICATION_REQUIRED.
     if (caps.platformName?.toLowerCase() === 'ios' && caps['appium:noReset'] && !caps['appium:bundleId'] && !caps['appium:app']) {
-      Questioner.clarify(
-        "iOS bundleId missing. What is the bundle identifier of your app?",
-        "When starting an iOS test without reinstalling the app (noReset: true), Appium requires the 'appium:bundleId' (e.g., com.apple.Preferences) to launch the app.",
-        ["Provide bundleId"]
-      );
+      console.warn('[AppForge] iOS bundleId not set — relying on Appium noReset:true to attach to running app.');
     }
 
     return caps;

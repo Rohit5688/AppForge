@@ -270,7 +270,7 @@ ${screenshotBase64 ? '### 🖼️ VISION CONTEXT\nA Base64 screenshot of the cur
           if (match[0].startsWith('content-desc') || match[0].startsWith('accessibility-id') || match[0].startsWith('name')) {
             alternatives.push(`~${value}`);
           } else if (match[0].startsWith('resource-id')) {
-            alternatives.push(value);
+            alternatives.push(`id=${value}`);  // id= prefix required by WebdriverIO
           } else {
             alternatives.push(`~${value}`);
           }

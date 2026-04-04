@@ -204,7 +204,7 @@ ${screenshotBase64 ? '### 🖼️ VISION CONTEXT\nA Base64 screenshot of the cur
                         alternatives.push(`~${value}`);
                     }
                     else if (match[0].startsWith('resource-id')) {
-                        alternatives.push(value);
+                        alternatives.push(`id=${value}`); // id= prefix required by WebdriverIO
                     }
                     else {
                         alternatives.push(`~${value}`);

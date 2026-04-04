@@ -1,11 +1,11 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
 
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface EnvironmentCheck {
   name: string;
@@ -27,6 +27,16 @@ export class EnvironmentCheckService {
    */
   public async check(projectRoot: string, platform: string = 'android', appPath?: string): Promise<EnvironmentReport> {
     const checks: EnvironmentCheck[] = [];
+
+    // Security: validate projectRoot before any filesystem operations
+    const resolvedRoot = path.resolve(projectRoot);
+    if (!resolvedRoot || resolvedRoot === path.sep) {
+      return {
+        ready: false,
+        checks: [{ name: 'Validation', status: 'fail', message: 'projectRoot is invalid or empty.' }],
+        summary: '❌ Invalid projectRoot. Provide an absolute path to your project directory.'
+      };
+    }
 
     // 1. Node.js version
     checks.push(await this.checkNode());
@@ -72,7 +82,7 @@ export class EnvironmentCheckService {
 
   private async checkNode(): Promise<EnvironmentCheck> {
     try {
-      const { stdout } = await execAsync('node --version');
+      const { stdout } = await execFileAsync('node', ['--version']);
       const version = stdout.trim();
       const major = parseInt(version.replace('v', '').split('.')[0]);
       if (major < 18) {
@@ -116,8 +126,19 @@ export class EnvironmentCheckService {
 
   private async checkAppiumDrivers(platform: string): Promise<EnvironmentCheck> {
     try {
-      const { stdout } = await execAsync('appium driver list --installed --json');
-      const drivers = JSON.parse(stdout);
+      const { stdout } = await execFileAsync('appium', ['driver', 'list', '--installed', '--json']);
+      let drivers: Record<string, any>;
+      try {
+        drivers = JSON.parse(stdout);
+      } catch {
+        // Appium printed non-JSON output (warnings, deprecation notices)
+        // Fall back: check if the output contains the driver name as plain text
+        const fallbackText = stdout.toLowerCase();
+        const needed = platform === 'ios' ? 'xcuitest' : 'uiautomator2';
+        return fallbackText.includes(needed)
+          ? { name: 'Appium Driver', status: 'pass', message: `${needed} driver appears installed (fallback parse)` }
+          : { name: 'Appium Driver', status: 'warn', message: 'Could not parse driver list JSON', fixHint: `Verify with: appium driver list --installed` };
+      }
 
       const needed = platform === 'ios' ? 'xcuitest' : 'uiautomator2';
       const driverKeys = Object.keys(drivers);
@@ -141,7 +162,7 @@ export class EnvironmentCheckService {
 
   private async checkAndroidEmulator(): Promise<EnvironmentCheck> {
     try {
-      const { stdout } = await execAsync('adb devices');
+      const { stdout } = await execFileAsync('adb', ['devices']);
       const lines = stdout.trim().split('\n').slice(1).filter(l => l.includes('device') && !l.includes('offline'));
       if (lines.length > 0) {
         return { name: 'Android Device', status: 'pass', message: `${lines.length} device(s) connected` };
@@ -155,7 +176,7 @@ export class EnvironmentCheckService {
 
   private async checkXcode(): Promise<EnvironmentCheck> {
     try {
-      const { stdout } = await execAsync('xcodebuild -version');
+      const { stdout } = await execFileAsync('xcodebuild', ['-version']);
       return { name: 'Xcode', status: 'pass', message: stdout.trim().split('\n')[0] };
     } catch {
       if (process.platform === 'darwin') {
@@ -167,7 +188,7 @@ export class EnvironmentCheckService {
 
   private async checkIosSimulator(): Promise<EnvironmentCheck> {
     try {
-      const { stdout } = await execAsync('xcrun simctl list devices booted --json');
+      const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
       const json = JSON.parse(stdout);
       const booted = Object.values(json.devices as Record<string, any[]>).flat().filter((d: any) => d.state === 'Booted');
       if (booted.length > 0) {

@@ -1,2 +1,14 @@
 node_modules
 binaries
+dist/
+
+# Environment secrets
+.env
+.env.local
+.env.staging
+.env.prod
+
+# User credential stores (never commit)
+test-data/users.local.json
+test-data/users.staging.json
+test-data/users.prod.json

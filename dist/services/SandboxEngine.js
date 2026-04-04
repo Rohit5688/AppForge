@@ -36,6 +36,8 @@ const BLOCKED_PATTERNS = [
     /\bworker_threads\b/,
     /\.constructor\s*\.\s*constructor/i,
     /this\s*\.\s*constructor\s*\.\s*constructor/i,
+    /Object\s*\.\s*getPrototypeOf/, // blocks prototype chain escape via AsyncFunction (AUDIT-07)
+    /Object\s*\.\s*getOwnPropertyDescriptor/, // blocks property descriptor access on host objects (AUDIT-07)
 ];
 /**
  * Validates a script for dangerous patterns before execution.
@@ -150,7 +152,8 @@ export async function executeSandbox(script, apiRegistry, options = {}) {
         decodeURIComponent,
         encodeURI,
         decodeURI,
-        Promise,
+        Promise: class SandboxPromise extends Promise {
+        },
         // === SECURITY: Explicitly block all dangerous globals ===
         // Setting to undefined ensures they cannot be accessed, even via prototype chains
         setTimeout: undefined,

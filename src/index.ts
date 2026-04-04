@@ -20,6 +20,7 @@ import { UtilAuditService } from "./services/UtilAuditService.js";
 import { CiWorkflowService } from "./services/CiWorkflowService.js";
 import { ClarificationRequired, Questioner } from "./utils/Questioner.js";
 import { AppForgeError } from "./utils/ErrorCodes.js";
+import { validateProjectRoot } from "./utils/SecurityUtils.js";
 import { LearningService } from "./services/LearningService.js";
 import { RefactoringService } from "./services/RefactoringService.js";
 import { BugReportService } from "./services/BugReportService.js";
@@ -155,7 +156,7 @@ class AppForgeServer {
         },
         {
           name: "execute_sandbox_code",
-          description: "🚀 TURBO MODE — USE FOR ALL PROJECT ANALYSIS. Runs a JavaScript snippet in a secure V8 sandbox without reading entire files. Always prefer this over analyze_codebase for real projects. Available APIs: forge.api.analyzeCodebase(projectRoot) → existing steps/pages/utils; forge.api.runTests(projectRoot) → runs tests; forge.api.readFile(filePath) → reads one file; forge.api.getConfig(projectRoot) → config object. Use `return <value>` in your script. Tip: answer questions like 'do I already have a LoginPage?' before generating new code.",
+          description: "🚀 TURBO MODE — USE FOR ALL PROJECT ANALYSIS. Runs a JavaScript snippet in a secure V8 sandbox without reading entire files. Always prefer this over analyze_codebase for real projects. Available APIs: forge.api.analyzeCodebase(projectRoot) → existing steps/pages/utils; forge.api.runTests(projectRoot) → runs tests; forge.api.readFile({ filePath, projectRoot }) → reads one file (path must be inside projectRoot); forge.api.getConfig(projectRoot) → config object. Use `return <value>` in your script. Tip: answer questions like 'do I already have a LoginPage?' before generating new code.",
           inputSchema: {
             type: "object",
             properties: {
@@ -507,11 +508,15 @@ class AppForgeServer {
             const platform = args.platform ?? 'android';
             const appName = args.appName ?? 'MyApp';
             const result = await this.projectSetupService.setup(args.projectRoot, platform, appName);
+            this.configService.migrateIfNeeded(args.projectRoot);
             return this.textResult(`${result}\n\n✅ Project scaffolded. Next: use manage_config (operation: 'read') to review your capabilities, then start_appium_session to connect to your device.`);
           }
 
-          case "upgrade_project":
-            return this.textResult(await this.projectMaintenanceService.upgradeProject(args.projectRoot));
+          case "upgrade_project": {
+            const upgradeResult = await this.projectMaintenanceService.upgradeProject(args.projectRoot);
+            this.configService.migrateIfNeeded(args.projectRoot);
+            return this.textResult(upgradeResult);
+          }
 
           case "repair_project":
             return this.textResult(await this.projectMaintenanceService.repairProject(args.projectRoot, args.platform));
@@ -647,6 +652,9 @@ class AppForgeServer {
           }
 
           case "generate_ci_workflow": {
+            // Security: validate projectRoot before writing any files
+            validateProjectRoot(args.projectRoot);
+
             const config = this.configService.read(args.projectRoot);
 
             // Extract best-effort CI parameters from config
@@ -766,9 +774,19 @@ class AppForgeServer {
               runTests: async (projectRoot: string) => {
                 return this.executionService.runTest(projectRoot, {});
               },
-              readFile: async (filePath: string) => {
+              readFile: async ({ filePath, projectRoot }: { filePath: string; projectRoot: string }) => {
                 const fs = await import('fs');
-                return fs.default.readFileSync(filePath, 'utf8');
+                const path = await import('path');
+                // Security: ensure the resolved path is strictly inside projectRoot
+                const resolvedRoot = path.default.resolve(projectRoot);
+                const resolvedFile = path.default.resolve(resolvedRoot, filePath);
+                if (!resolvedFile.startsWith(resolvedRoot + path.default.sep) && resolvedFile !== resolvedRoot) {
+                  throw new Error(`[SECURITY] Path traversal blocked. "${filePath}" resolves outside projectRoot.`);
+                }
+                if (!fs.default.existsSync(resolvedFile)) {
+                  throw new Error(`File not found: ${resolvedFile}`);
+                }
+                return fs.default.readFileSync(resolvedFile, 'utf8');
               },
               getConfig: async (projectRoot: string) => {
                 return this.configService.read(projectRoot);

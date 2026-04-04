@@ -14,7 +14,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "npm run build && node --test dist/tests/",
+    "pretest": "tsc",
+    "test": "node --test dist/tests/",
+    "test:watch": "node --test --watch src/tests/",
     "build:macos": "pkg . --targets node18-macos-arm64,node18-macos-x64 --out-path binaries",
     "build:win": "pkg . --targets node18-win-x64 --out-path binaries"
   },
